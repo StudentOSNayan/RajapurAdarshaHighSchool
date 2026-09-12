@@ -1,0 +1,16 @@
+# Keep repo lightweight — production static site only.
+node_modules/
+dist/
+build/
+.next/
+out/
+coverage/
+*.log
+.DS_Store
+Thumbs.db
+*.tmp
+*~
+.sass-cache/
+.parcel-cache/
+__pycache__/
+.venv/
