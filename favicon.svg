@@ -1,7 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <circle cx="32" cy="32" r="30" fill="#0B5B3E"/>
-  <circle cx="32" cy="32" r="30" fill="none" stroke="#C9A23C" stroke-width="2"/>
-  <circle cx="32" cy="32" r="24.5" fill="none" stroke="#C9A23C" stroke-width="1.2" opacity="0.6"/>
-  <text x="32" y="30" text-anchor="middle" fill="#FFFFFF" font-family="Inter, Arial, sans-serif" font-weight="800" font-size="14" letter-spacing="1.5">RAHS</text>
-  <text x="32" y="43" text-anchor="middle" fill="#E8C97A" font-family="Inter, Arial, sans-serif" font-weight="600" font-size="8" letter-spacing="2.2">RAJAPUR</text>
+  <rect width="64" height="64" rx="16" fill="#0E5B43"/>
+  <text x="32" y="38" text-anchor="middle" fill="#fff" font-family="Arial, Helvetica, sans-serif" font-weight="800" font-size="23" letter-spacing="1">RA</text>
+  <rect x="20" y="44.5" width="24" height="3.6" rx="1.8" fill="#C9A23C"/>
 </svg>

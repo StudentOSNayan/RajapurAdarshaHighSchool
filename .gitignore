@@ -14,3 +14,12 @@ Thumbs.db
 .parcel-cache/
 __pycache__/
 .venv/
+
+# Original (unoptimized) source photos — kept locally as source assets,
+# not committed. Optimized web copies live in assets/img/.
+originals/
+
+# Local dev artifacts
+*.screenshot.png
+playwright-report/
+test-results/
