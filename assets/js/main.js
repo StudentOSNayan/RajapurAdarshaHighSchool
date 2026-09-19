@@ -10,7 +10,7 @@
   const setMenu = (isOpen) => {
     if (!menuButton || !mobileMenu) return;
     menuButton.setAttribute("aria-expanded", String(isOpen));
-    menuButton.setAttribute("aria-label", isOpen ? "Close menu" : "Open menu");
+    menuButton.setAttribute("aria-label", isOpen ? "মেনু বন্ধ করুন" : "মেনু খুলুন");
     mobileMenu.hidden = !isOpen;
   };
 
@@ -71,7 +71,7 @@
   const announceCount = () => {
     if (!status) return;
     const count = visibleItems().length;
-    status.textContent = `${count} photo${count === 1 ? "" : "s"} shown.`;
+    status.textContent = `${count}টি ছবি দেখানো হচ্ছে।`;
   };
 
   const applyFilter = (filter) => {
@@ -107,7 +107,7 @@
 
     dialogImage.src = trigger.dataset.image || "";
     dialogImage.alt = trigger.dataset.alt || "";
-    dialogTitle.textContent = trigger.dataset.title || "School photograph";
+    dialogTitle.textContent = trigger.dataset.title || "বিদ্যালয়ের ছবি";
     dialogDescription.textContent = trigger.dataset.description || "";
     activeItem = item;
     updateDialogControls();

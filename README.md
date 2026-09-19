@@ -1,52 +1,46 @@
-# Rajapur Adarsha High School
+# রাজাপুর আদর্শ উচ্চ বিদ্যালয় (Rajapur Adarsha High School)
 
-A lightweight, static official website for **Rajapur Adarsha High School** in Rajapur, Ramshil, Kotalipara, Gopalganj, Bangladesh.
+একটি দ্রুতগতির, নান্দনিক ও বাংলা-প্রথম (Bengali-first) অফিশিয়াল ওয়েবসাইট — **রাজাপুর আদর্শ উচ্চ বিদ্যালয়**, রাজাপুর, রামশীল, কোটালীপাড়া, গোপালগঞ্জ, বাংলাদেশ।
 
-## Stack
+## মূল বৈশিষ্ট্যসমূহ (Key Features)
 
-- Plain HTML, CSS and vanilla JavaScript
-- No framework, build step or third-party UI library
-- Responsive layout with Bengali-friendly typography
-- Accessible mobile navigation and photo gallery lightbox
+- **বাংলা-প্রথম রূপরেখা (Bengali-first Design):** সকল পৃষ্ঠা, শিরোনাম, নেভিগেশন ও বিবরণ বাংলায় উপস্থাপিত; সাথে ইংরেজি সাবটাইটেল।
+- **কমপ্যাক্ট ফটো-ব্যাকগ্রাউন্ড হিরো (Compact Photo Hero):** বিদ্যালয় ক্যাম্পাসের ছবি ও দৃষ্টিনন্দন পান্না-সবুজ (emerald) ওভারলে সহ কমপ্যাক্ট হিরো সেকশন (কোনো অপ্রয়োজনীয় পূর্ণ-স্ক্রিন বা দীর্ঘ ব্যানার নয়)।
+- **বাংলা নেভিগেশন ও মোবাইল মেনু:** ডেস্কটপ ও মোবাইলের জন্য সুলিখিত বাংলা মেনু এবং স্পর্শ-অনুকূল টগল।
+- **জরুরি নোটিশ স্ট্রিপ:** মূল পাতায় তাৎক্ষণিক মডেল টেস্ট ও গুরুত্বপূর্ণ নোটিশ প্রদর্শনী।
+- **দ্রুত সেবা কার্ড (Quick-Access Cards):** নোটিশ, গ্যালারি, ভর্তি ও যোগাযোগ পাতায় সহজে পৌঁছানোর কার্ড।
+- **কিউরেটেড ফটো গ্যালারি:** ক্যাটাগরি ভিত্তিক ফিল্টার ও অ্যাক্সেসিবল লাইটবক্স সহ ১৭টি নির্বাচিত ক্যাম্পাসের ছবির সংগ্রহ।
+- **যাচাইকৃত যোগাযোগ:** বিদ্যালয়ের ঠিকানা, অফিস সময় (সকাল ১০:০০ – বিকাল ৪:০০) ও ৫ জন দায়িত্বপ্রাপ্ত ব্যক্তির ফোন নম্বর।
 
-## Pages
+## ব্যবহৃত প্রযুক্তি (Tech Stack)
 
-| Page | File | Purpose |
+- বিশুদ্ধ HTML5, CSS3 ও ভ্যানিলা জাভাস্ক্রিপ্ট (কোনো ফ্রেমওয়ার্ক বা বাহ্যিক লাইব্রেরির নির্ভরতা নেই)
+- ফন্ট: Noto Sans Bengali ও Manrope
+- সম্পূর্ণ রেসপনসিভ ও অ্যাক্সেসিবল ডিজাইন
+
+## পৃষ্ঠাসমূহ (Pages)
+
+| পৃষ্ঠা | ফাইল | বিবরণ |
 | --- | --- | --- |
-| Home | `index.html` | Compact hero, current notice, quick access, notices, events, contact |
-| About | `about.html` | School introduction, history/mission scope, head teacher, office |
-| Academics | `academics.html` | Published academic information and office guidance |
-| Admission | `admission.html` | Direct route to current admission information from the office |
-| Notices & News | `notices.html` | Separate official notices and school news/events |
-| Gallery | `gallery.html` | Curated, filterable photo collection with accessible lightbox |
-| Contact | `contact.html` | Address, office hours and school phone numbers |
+| প্রচ্ছদ (Home) | `index.html` | কমপ্যাক্ট ফটো হিরো, জরুরি নোটিশ স্ট্রিপ, কুইক এক্সেস, নোটিশ, খবর ও যোগাযোগ |
+| পরিচিতি (About) | `about.html` | বিদ্যালয় পরিচিতি, ইতিহাস, লক্ষ্য-উদ্দেশ্য, প্রধান শিক্ষক ও কার্যালয় বিবরণ |
+| একাডেমিক (Academics) | `academics.html` | নিয়মিত পাঠদান, সহশিক্ষা, শিক্ষাবর্ষ ও পরীক্ষা সংক্রান্ত দিকনির্দেশনা |
+| ভর্তি তথ্য (Admission) | `admission.html` | ষষ্ঠ থেকে দশম শ্রেণিতে ভর্তি প্রক্রিয়া ও কার্যালয় অনুসন্ধানের তথ্যাদি |
+| নোটিশ ও খবর (Notices & News) | `notices.html` | অফিশিয়াল নোটিশ এবং সাম্প্রতিক সংবাদ ও ইভেন্টের বিবরণ |
+| গ্যালারি (Gallery) | `gallery.html` | ক্যাটাগরি ভিত্তিক ফিল্টার এবং লাইটবক্স ভিউয়ার সহ ফটো গ্যালারি |
+| যোগাযোগ (Contact) | `contact.html` | বিদ্যালয়ের পূর্ণ ঠিকানা, অফিস সময় ও ৫টি দায়িত্বপ্রাপ্ত ফোন নম্বর |
+| ত্রুটি পাতা (404) | `404.html` | নিখোঁজ পাতার জন্য বাংলা নির্দেশনামূলক পৃষ্ঠা |
 
-## Published information
+## লোকাল ডেভেলপমেন্ট (Local Development)
 
-The website limits content to details available for publication:
-
-- School name: Rajapur Adarsha High School / রাজাপুর আদর্শ উচ্চ বিদ্যালয়
-- Address: রাজাপুর, রামশীল, কোটালীপাড়া, গোপালগঞ্জ, বাংলাদেশ
-- Office: 10:00 AM – 4:00 PM
-- Head Teacher: Sopon Kumar Adhikary
-- Official notice: model test examinations for all classes begin on 20 September 2026
-- Documented events: Annual Sports Competition & Cultural Program (28–29 January 2026), Educational Tour to Bagerhat (28 April 2026), tree-planting and football activities
-- Five school contact numbers on the Contact page
-
-## Photos
-
-The public gallery uses a curated set of optimized WebP images in `assets/img/`. Category metadata powers the filters, so the same physical photo is not duplicated for separate categories.
-
-## Run locally
-
-No installation is required:
+কোনো প্যাকেজ ইন্সটলেশনের প্রয়োজন নেই:
 
 ```bash
 python3 -m http.server 8080 --bind 0.0.0.0
 ```
 
-Then open `http://localhost:8080`.
+ব্রাউজারে `http://localhost:8080` খুলুন।
 
-## Deployment
+## ডিপ্লয়মেন্ট (Deployment)
 
-The site can be deployed directly as a static site on Vercel. No build command or output directory is needed.
+এটি একটি স্ট্যাটিক সাইট, যা সরাসরি Vercel বা GitHub Pages-এ যেকোনো বিল্ড স্টেপ ছাড়াই নির্বিঘ্নে ডিপ্লয় করা যায়।
