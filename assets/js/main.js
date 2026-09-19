@@ -1,94 +1,183 @@
-/* Rajapur Adarsha High School — v2
-   Vanilla JS only: mobile menu, header shadow, scroll reveal,
-   back-to-top, footer year. No dependencies. Keep tiny. */
-(function () {
-  'use strict';
+/* Shared interactions for Rajapur Adarsha High School */
+(() => {
+  "use strict";
 
-  document.documentElement.classList.add('js');
+  const header = document.querySelector(".site-header");
+  const menuButton = document.getElementById("navToggle");
+  const mobileMenu = document.getElementById("mobileMenu");
+  const toTop = document.getElementById("toTop");
 
-  var reduced = function () {
-    return window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const setMenu = (isOpen) => {
+    if (!menuButton || !mobileMenu) return;
+    menuButton.setAttribute("aria-expanded", String(isOpen));
+    menuButton.setAttribute("aria-label", isOpen ? "Close menu" : "Open menu");
+    mobileMenu.hidden = !isOpen;
   };
 
-  /* ---------- mobile menu ---------- */
-  var toggle = document.getElementById('navToggle');
-  var menu = document.getElementById('mobileMenu');
-  var header = document.getElementById('siteHeader');
-
-  function closeMenu() {
-    if (!menu || menu.hidden) return;
-    menu.hidden = true;
-    if (toggle) {
-      toggle.setAttribute('aria-expanded', 'false');
-      toggle.setAttribute('aria-label', 'Open menu');
-    }
-  }
-
-  if (toggle && menu) {
-    toggle.addEventListener('click', function () {
-      var open = menu.hidden;
-      menu.hidden = !open;
-      toggle.setAttribute('aria-expanded', String(open));
-      toggle.setAttribute('aria-label', open ? 'Close menu' : 'Open menu');
+  if (menuButton && mobileMenu) {
+    menuButton.addEventListener("click", () => {
+      setMenu(menuButton.getAttribute("aria-expanded") !== "true");
     });
-    menu.querySelectorAll('a').forEach(function (a) {
-      a.addEventListener('click', closeMenu);
-    });
-    window.addEventListener('resize', function () {
-      if (window.innerWidth > 1019) closeMenu();
-    }, { passive: true });
-  }
 
-  /* ---------- back to top ---------- */
-  var toTop = document.getElementById('toTop');
-  if (toTop) {
-    toTop.addEventListener('click', function () {
-      window.scrollTo({ top: 0, behavior: reduced() ? 'auto' : 'smooth' });
+    mobileMenu.querySelectorAll("a").forEach((link) => {
+      link.addEventListener("click", () => setMenu(false));
+    });
+
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && menuButton.getAttribute("aria-expanded") === "true") {
+        setMenu(false);
+        menuButton.focus();
+      }
     });
   }
 
-  function onScroll() {
-    if (header) header.classList.toggle('scrolled', window.scrollY > 8);
-    if (toTop) toTop.classList.toggle('show', window.scrollY > 600);
-  }
-  window.addEventListener('scroll', onScroll, { passive: true });
-  onScroll();
+  const updateScrollState = () => {
+    const scrolled = window.scrollY > 12;
+    header?.classList.toggle("is-scrolled", scrolled);
+    toTop?.classList.toggle("is-visible", window.scrollY > 520);
+  };
 
-  /* ---------- scroll reveal ---------- */
-  var reveals = document.querySelectorAll('.reveal');
-  if (reveals.length) {
-    if ('IntersectionObserver' in window && !reduced()) {
-      var io = new IntersectionObserver(function (entries) {
-        entries.forEach(function (entry) {
-          if (entry.isIntersecting) {
-            entry.target.classList.add('in-view');
-            io.unobserve(entry.target);
-          }
-        });
-      }, { threshold: 0.12, rootMargin: '0px 0px -40px 0px' });
-      reveals.forEach(function (el) { io.observe(el); });
-    } else {
-      reveals.forEach(function (el) { el.classList.add('in-view'); });
-    }
-  }
+  window.addEventListener("scroll", updateScrollState, { passive: true });
+  updateScrollState();
 
-  /* ---------- image fallback: clean placeholder if a photo file is missing ---------- */
-  document.querySelectorAll('.photo img, .event-media img').forEach(function (img) {
-    img.addEventListener('error', function () {
-      var holder = img.closest('.event-media') || img.closest('figure') || img.parentElement;
-      if (!holder) return;
-      var ph = document.createElement('div');
-      ph.className = 'photo-pending';
-      ph.setAttribute('role', 'img');
-      ph.setAttribute('aria-label', img.getAttribute('alt') || 'Photo coming soon');
-      var label = document.createElement('span');
-      label.textContent = 'Photo coming soon';
-      ph.appendChild(label);
-      img.replaceWith(ph);
-    });
+  toTop?.addEventListener("click", () => {
+    window.scrollTo({ top: 0, behavior: "smooth" });
   });
 
-  /* ---------- footer year ---------- */
-  var y = document.getElementById('year');
-  if (y) y.textContent = String(new Date().getFullYear());
+  document.querySelectorAll("[data-current-year]").forEach((node) => {
+    node.textContent = new Date().getFullYear();
+  });
+
+  const gallery = document.querySelector("[data-gallery]");
+  if (!gallery) return;
+
+  const filterButtons = Array.from(gallery.querySelectorAll("[data-filter]"));
+  const galleryItems = Array.from(gallery.querySelectorAll("[data-gallery-item]"));
+  const status = document.getElementById("galleryStatus");
+  const dialog = document.getElementById("lightbox");
+  const dialogImage = document.getElementById("lightboxImage");
+  const dialogTitle = document.getElementById("lightboxTitle");
+  const dialogDescription = document.getElementById("lightboxDescription");
+  const closeButton = document.getElementById("lightboxClose");
+  const previousButton = document.getElementById("lightboxPrevious");
+  const nextButton = document.getElementById("lightboxNext");
+
+  let activeFilter = "all";
+  let activeItem = null;
+  let lastTrigger = null;
+
+  const visibleItems = () => galleryItems.filter((item) => !item.hidden);
+
+  const announceCount = () => {
+    if (!status) return;
+    const count = visibleItems().length;
+    status.textContent = `${count} photo${count === 1 ? "" : "s"} shown.`;
+  };
+
+  const applyFilter = (filter) => {
+    activeFilter = filter;
+
+    galleryItems.forEach((item) => {
+      const tags = (item.dataset.tags || "").split(" ");
+      item.hidden = filter !== "all" && !tags.includes(filter);
+    });
+
+    filterButtons.forEach((button) => {
+      const selected = button.dataset.filter === filter;
+      button.setAttribute("aria-pressed", String(selected));
+    });
+
+    announceCount();
+  };
+
+  filterButtons.forEach((button) => {
+    button.addEventListener("click", () => applyFilter(button.dataset.filter || "all"));
+  });
+
+  const updateDialogControls = () => {
+    if (!previousButton || !nextButton) return;
+    const hasMoreThanOne = visibleItems().length > 1;
+    previousButton.disabled = !hasMoreThanOne;
+    nextButton.disabled = !hasMoreThanOne;
+  };
+
+  const populateDialog = (item) => {
+    const trigger = item.querySelector("[data-gallery-open]");
+    if (!trigger || !dialogImage || !dialogTitle || !dialogDescription) return;
+
+    dialogImage.src = trigger.dataset.image || "";
+    dialogImage.alt = trigger.dataset.alt || "";
+    dialogTitle.textContent = trigger.dataset.title || "School photograph";
+    dialogDescription.textContent = trigger.dataset.description || "";
+    activeItem = item;
+    updateDialogControls();
+  };
+
+  const openDialog = (item, trigger) => {
+    if (!dialog) return;
+    lastTrigger = trigger;
+    populateDialog(item);
+
+    if (typeof dialog.showModal === "function") {
+      if (!dialog.open) dialog.showModal();
+    } else {
+      dialog.setAttribute("open", "");
+    }
+
+    closeButton?.focus();
+  };
+
+  const closeDialog = () => {
+    if (!dialog) return;
+    if (typeof dialog.close === "function" && dialog.open) {
+      dialog.close();
+    } else {
+      dialog.removeAttribute("open");
+      lastTrigger?.focus();
+    }
+  };
+
+  const stepDialog = (direction) => {
+    const items = visibleItems();
+    if (!activeItem || items.length < 2) return;
+    const currentIndex = items.indexOf(activeItem);
+    const nextIndex = (currentIndex + direction + items.length) % items.length;
+    populateDialog(items[nextIndex]);
+  };
+
+  galleryItems.forEach((item) => {
+    const trigger = item.querySelector("[data-gallery-open]");
+    trigger?.addEventListener("click", () => openDialog(item, trigger));
+  });
+
+  closeButton?.addEventListener("click", closeDialog);
+  previousButton?.addEventListener("click", () => stepDialog(-1));
+  nextButton?.addEventListener("click", () => stepDialog(1));
+
+  dialog?.addEventListener("click", (event) => {
+    if (event.target === dialog) closeDialog();
+  });
+
+  dialog?.addEventListener("close", () => {
+    lastTrigger?.focus();
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (!dialog?.open) return;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeDialog();
+      return;
+    }
+    if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      stepDialog(-1);
+    }
+    if (event.key === "ArrowRight") {
+      event.preventDefault();
+      stepDialog(1);
+    }
+  });
+
+  applyFilter(activeFilter);
 })();
