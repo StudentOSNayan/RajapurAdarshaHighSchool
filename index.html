@@ -28,7 +28,7 @@
       <nav class="main-nav" aria-label="প্রধান নেভিগেশন">
         <a class="active" aria-current="page" href="index.html">প্রচ্ছদ</a>
         <a href="about.html">পরিচিতি</a>
-        <a href="academics.html">একাডেমিক</a>
+        <a href="academics.html">একাডেমিক<span class="nav-mini-tag" aria-hidden="true">SSC</span></a>
         <a href="admission.html">ভর্তি তথ্য</a>
         <a href="notices.html">নোটিশ ও খবর</a>
         <a href="gallery.html">গ্যালারি</a>
@@ -43,7 +43,7 @@
       <nav aria-label="মোবাইল নেভিগেশন">
         <a class="active" aria-current="page" href="index.html">প্রচ্ছদ</a>
         <a href="about.html">পরিচিতি</a>
-        <a href="academics.html">একাডেমিক</a>
+        <a href="academics.html">একাডেমিক<span class="nav-mini-tag">SSC ফলাফল</span></a>
         <a href="admission.html">ভর্তি তথ্য</a>
         <a href="notices.html">নোটিশ ও খবর</a>
         <a href="gallery.html">গ্যালারি</a>
@@ -55,97 +55,118 @@
 
   <main id="main-content">
     <section class="home-hero" aria-labelledby="hero-title">
-      <div class="container">
-        <div class="hero-compact">
+      <div class="container hero-grid">
+        <div class="hero-copy">
           <p class="hero-kicker-compact"><span class="hero-kicker-dot" aria-hidden="true"></span> অফিশিয়াল বিদ্যালয় ওয়েবসাইট</p>
           <h1 id="hero-title">রাজাপুর আদর্শ উচ্চ বিদ্যালয়</h1>
           <p class="hero-sub-en">Rajapur Adarsha High School</p>
-          <p class="lead">কোটালীপাড়া, গোপালগঞ্জের একটি ঐতিহ্যবাহী বিদ্যাপীঠ — সততা, জ্ঞান ও শৃঙ্খলার সমন্বয়ে ভবিষ্যৎ প্রজন্ম গড়ার প্রত্যয়।</p>
           <p class="hero-location">
             <svg class="location-pin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M20 10c0 5-8 11-8 11S4 15 4 10a8 8 0 1 1 16 0Z"/><circle cx="12" cy="10" r="2.5"/></svg>
             <span>রাজাপুর, রামশীল, কোটালীপাড়া, গোপালগঞ্জ, বাংলাদেশ</span>
           </p>
+          <p class="hero-lead">কোটালীপাড়া, গোপালগঞ্জের একটি ঐতিহ্যবাহী বিদ্যাপীঠ — সততা, জ্ঞান ও শৃঙ্খলার সমন্বয়ে ভবিষ্যৎ প্রজন্ম গড়ার প্রত্যয়।</p>
           <div class="hero-actions" aria-label="মূল লিঙ্কসমূহ">
             <a class="btn btn-gold" href="notices.html">নোটিশ দেখুন</a>
             <a class="btn btn-outline-white" href="admission.html">ভর্তি তথ্য</a>
-            <a class="btn btn-outline-white" href="contact.html">যোগাযোগ</a>
           </div>
         </div>
+        <figure class="photo-frame hero-media">
+          <img src="assets/img/campus-hero.webp" width="1440" height="1080" alt="রাজাপুর আদর্শ উচ্চ বিদ্যালয় ভবন ও খেলার মাঠ" fetchpriority="high" decoding="async">
+          <figcaption>প্রধান বিদ্যালয় ভবন ও সামনের খেলার মাঠের মনোরম দৃশ্য।</figcaption>
+        </figure>
       </div>
     </section>
 
-    <section class="notice-strip" aria-label="জরুরি নোটিশ">
-      <div class="container notice-strip-inner">
-        <span class="notice-label">জরুরি নোটিশ</span>
-        <p>২০ সেপ্টেম্বর ২০২৬ থেকে সকল শ্রেণির মডেল টেস্ট পরীক্ষা শুরু হবে।</p>
-        <a href="notices.html#official-notices">বিস্তারিত নোটিশ দেখুন <span aria-hidden="true">→</span></a>
-      </div>
-    </section>
-
-    <section class="section" aria-labelledby="quick-access-title">
+    <section class="home-notice" aria-label="সর্বশেষ বিজ্ঞপ্তি">
       <div class="container">
-        <div class="section-heading">
-          <div>
-            <p class="eyebrow">এক নজরে</p>
-            <h2 id="quick-access-title">গুরুত্বপূর্ণ লিঙ্কসমূহ</h2>
+        <div class="home-notice-card">
+          <span class="notice-label">সর্বশেষ বিজ্ঞপ্তি</span>
+          <div class="home-notice-body">
+            <p class="home-notice-text">২০ সেপ্টেম্বর ২০২৬ থেকে সকল শ্রেণির মডেল টেস্ট পরীক্ষা শুরু হবে।</p>
+            <p class="home-notice-meta">
+              <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M8 2v4M16 2v4M3 9h18"/></svg>২০ সেপ্টেম্বর ২০২৬</span>
+              <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Z"/><path d="M12 7v5l3 2"/></svg>সকল শ্রেণি</span>
+            </p>
           </div>
-        </div>
-        <div class="quick-grid">
-          <a class="quick-link" href="notices.html">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M7 3h8l3 3v15H7z"/><path d="M15 3v4h4M10 11h5M10 15h5"/></svg>
-            <span><strong>নোটিশ ও খবর</strong>অফিশিয়াল নোটিশ, পরীক্ষার সময়সূচি ও ইভেন্ট</span>
-          </a>
-          <a class="quick-link" href="gallery.html">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9" r="1.5"/><path d="m5 17 4.5-4.5 3 3L15 13l4 4"/></svg>
-            <span><strong>ফটো গ্যালারি</strong>ক্যাম্পাস ও বিদ্যালয় জীবনের স্থিরচিত্র</span>
-          </a>
-          <a class="quick-link" href="admission.html">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v16H6.5A2.5 2.5 0 0 0 4 21.5v-16Z"/><path d="M4 19h16M8 7h8M8 11h6"/></svg>
-            <span><strong>ভর্তি তথ্য</strong>নতুন শিক্ষাবর্ষে ভর্তির নিয়মাবলী ও তথ্য</span>
-          </a>
-          <a class="quick-link" href="contact.html">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M22 16.9v3a2 2 0 0 1-2.18 2 19.8 19.8 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.12 4.2 2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.12.9.33 1.8.63 2.66a2 2 0 0 1-.45 2.11L8.02 9.76a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.86.3 1.76.51 2.66.63A2 2 0 0 1 22 16.9Z"/></svg>
-            <span><strong>যোগাযোগ</strong>ঠিকানা, অফিস সময় ও মোবাইল নম্বরসমূহ</span>
-          </a>
+          <a class="home-notice-link" href="notices.html#official-notices">সব নোটিশ দেখুন <span aria-hidden="true">→</span></a>
         </div>
       </div>
     </section>
 
     <section class="section section-soft" aria-labelledby="about-preview-title">
-      <div class="container split-feature">
+      <div class="container">
+        <div class="split-feature">
         <div class="feature-copy">
           <p class="eyebrow">বিদ্যালয় পরিচিতি</p>
           <h2 id="about-preview-title">ক্যাম্পাস ও শিক্ষার মনোরম পরিবেশ</h2>
           <p class="lead">প্রাকৃতিক সৌন্দর্যমণ্ডিত কোটালীপাড়ার রাজাপুরে শিক্ষার্থীদের নৈতিক, মানবিক ও আধুনিক গুণাবলীতে সমৃদ্ধ করে তোলার লক্ষ্যে আমাদের প্রচেষ্টা।</p>
           <p class="small-copy">বিদ্যালয় সম্পর্কিত যেকোনো বিস্তারিত তথ্য ও অনুসন্ধানের জন্য সরাসরি বিদ্যালয় কার্যালয়ে যোগাযোগের পরামর্শ দেওয়া হচ্ছে।</p>
-          <a class="text-link" href="about.html">বিদ্যালয় সম্পর্কে বিস্তারিত জানুন →</a>
+          <a class="text-link" href="about.html">বিদ্যালয় সম্পর্কে বিস্তারিত জানুন</a>
         </div>
         <figure class="photo-frame feature-media">
           <img src="assets/img/building-assembly.webp" width="960" height="720" alt="বিদ্যালয় ভবনের বারান্দায় শিক্ষার্থীদের সমাবেশ" loading="lazy" decoding="async">
           <figcaption>বিদ্যালয় ভবনে সমবেত শিক্ষার্থীবৃন্দ</figcaption>
         </figure>
+        </div>
+        <dl class="fact-grid">
+          <div class="fact">
+            <dt>প্রতিষ্ঠাকাল</dt>
+            <dd>১৯৯৫</dd>
+          </div>
+          <div class="fact">
+            <dt>EIIN</dt>
+            <dd>109578</dd>
+          </div>
+          <div class="fact">
+            <dt>শিক্ষা বোর্ড</dt>
+            <dd>ঢাকা বোর্ড</dd>
+          </div>
+          <div class="fact">
+            <dt>শ্রেণি</dt>
+            <dd>ষষ্ঠ থেকে দশম</dd>
+          </div>
+          <div class="fact">
+            <dt>ঠিকানা</dt>
+            <dd>রাজাপুর, রামশীল, কোটালীপাড়া, গোপালগঞ্জ</dd>
+          </div>
+        </dl>
       </div>
     </section>
 
-    <section class="section" aria-labelledby="latest-notices-title">
+    <section class="perf-band" id="academic-performance" aria-labelledby="perf-title">
       <div class="container">
-        <div class="section-heading">
+        <div class="perf-head">
           <div>
-            <p class="eyebrow">সর্বশেষ বিজ্ঞপ্তি</p>
-            <h2 id="latest-notices-title">অফিশিয়াল নোটিশ</h2>
+            <p class="eyebrow eyebrow-light">Academic Performance</p>
+            <h2 id="perf-title">একাডেমিক ফলাফল</h2>
           </div>
-          <a class="text-link" href="notices.html#official-notices">সকল অফিশিয়াল নোটিশ →</a>
+          <p class="perf-note">২০০৯ থেকে ২০২৬ সাল পর্যন্ত বিদ্যালয়ের SSC পরীক্ষার সার্বিক ফলাফল (ঢাকা বোর্ড)।</p>
         </div>
-        <div class="notice-list">
-          <article class="notice-card primary-notice">
-            <div class="meta-row"><span class="tag gold">অফিশিয়াল নোটিশ</span><span class="tag">মডেল টেস্ট</span></div>
-            <h3>২০ সেপ্টেম্বর ২০২৬ থেকে সকল শ্রেণির মডেল টেস্ট পরীক্ষা শুরু হবে।</h3>
-            <p class="small-copy">সকল শ্রেণির শিক্ষার্থীদের যথাসময়ে মডেল টেস্ট পরীক্ষায় অংশগ্রহণের জন্য নির্দেশ দেওয়া হচ্ছে। বিস্তারিত রুটিনের জন্য কার্যালয়ে যোগাযোগ করুন।</p>
-            <div class="notice-details">
-              <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M8 2v4M16 2v4M3 9h18"/></svg>২০ সেপ্টেম্বর ২০২৬</span>
-              <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Z"/><path d="M12 7v5l3 2"/></svg>সকল শ্রেণি</span>
-            </div>
-          </article>
+        <div class="perf-grid">
+          <div class="perf-stat">
+            <strong class="perf-value">72.00%</strong>
+            <span class="perf-label">সার্বিক পাশের হার</span>
+            <span class="perf-sub">Overall SSC Pass Rate (2009–2026)</span>
+          </div>
+          <div class="perf-stat">
+            <strong class="perf-value">27</strong>
+            <span class="perf-label">GPA-5 পাশকারি</span>
+            <span class="perf-sub">Total GPA-5 (2009–2026)</span>
+          </div>
+          <div class="perf-stat">
+            <strong class="perf-value">1,350</strong>
+            <span class="perf-label">মোট উপস্থিত</span>
+            <span class="perf-sub">Total Candidates (2009–2026)</span>
+          </div>
+          <div class="perf-stat">
+            <strong class="perf-value">82.05%</strong>
+            <span class="perf-label">২০২৬ পাশের হার</span>
+            <span class="perf-sub">2026 SSC Pass Rate</span>
+          </div>
+        </div>
+        <div class="perf-actions">
+          <a class="btn btn-gold" href="academics.html#ssc-results">সম্পূর্ণ SSC ফলাফল দেখুন <span aria-hidden="true">→</span></a>
+          <p class="perf-src">সোর্স: Sohopathi — তৃতীয় পক্ষের শিক্ষা-তথ্য পোর্টাল।</p>
         </div>
       </div>
     </section>
@@ -157,7 +178,7 @@
             <p class="eyebrow">বিদ্যালয় জীবন</p>
             <h2 id="news-title">সাম্প্রতিক সংবাদ ও কার্যক্রম</h2>
           </div>
-          <a class="text-link" href="notices.html#news-events">সব খবর ও ইভেন্ট দেখুন →</a>
+          <a class="text-link" href="notices.html#news-events">সব খবর ও ইভেন্ট দেখুন</a>
         </div>
         <div class="event-grid three">
           <article class="card">
@@ -211,7 +232,7 @@
             <p class="eyebrow">ফটো গ্যালারি</p>
             <h2 id="gallery-preview-title">বিদ্যালয় জীবনের নির্বাচিত মুহূর্তসমূহ</h2>
           </div>
-          <a class="text-link" href="gallery.html">সম্পূর্ণ গ্যালারি দেখুন →</a>
+          <a class="text-link" href="gallery.html">সম্পূর্ণ গ্যালারি দেখুন</a>
         </div>
         <div class="photo-strip">
           <a href="gallery.html" aria-label="গ্যালারি খুলুন: শিক্ষার্থীদের অনুষ্ঠান"><img src="assets/img/students-program.webp" width="1200" height="900" alt="বিদ্যালয়ের অনুষ্ঠানে সমবেত শিক্ষার্থীবৃন্দ" loading="lazy" decoding="async"></a>

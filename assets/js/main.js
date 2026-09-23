@@ -48,6 +48,26 @@
     node.textContent = new Date().getFullYear();
   });
 
+  // Results table: hide the edge fade once the user has scrolled to the end
+  document.querySelectorAll(".table-wrap").forEach((wrap) => {
+    const frame = wrap.closest(".table-frame");
+    if (!frame) return;
+    const update = () => {
+      const atEnd = wrap.scrollWidth - wrap.scrollLeft - wrap.clientWidth < 4;
+      frame.classList.toggle("is-end", atEnd);
+    };
+    wrap.addEventListener("scroll", update, { passive: true });
+    window.addEventListener("resize", update, { passive: true });
+    update();
+
+    // Arrow keys move the focused table horizontally (Chromium needs help here)
+    wrap.addEventListener("keydown", (event) => {
+      const step = Math.round(wrap.clientWidth * 0.6);
+      if (event.key === "ArrowRight") { wrap.scrollLeft += step; event.preventDefault(); }
+      if (event.key === "ArrowLeft") { wrap.scrollLeft -= step; event.preventDefault(); }
+    });
+  });
+
   const gallery = document.querySelector("[data-gallery]");
   if (!gallery) return;
 

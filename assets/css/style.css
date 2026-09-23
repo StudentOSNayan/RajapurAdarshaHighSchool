@@ -447,157 +447,280 @@ address { font-style: normal; }
   background: rgba(255, 255, 255, 0.22);
 }
 
-/* Compact photo-background hero with subtle emerald overlay */
+/* Compact premium hero — split layout, real photo in a rounded card */
 .home-hero {
   position: relative;
   overflow: hidden;
-  padding: clamp(3.2rem, 6.8vw, 5.2rem) 0 clamp(3.4rem, 7vw, 5.4rem);
-  background-color: var(--emerald-dark);
-  background-image:
-    linear-gradient(135deg, rgba(6, 38, 28, 0.90) 0%, rgba(15, 90, 67, 0.84) 55%, rgba(7, 45, 34, 0.92) 100%),
-    url('../img/campus-hero.webp');
-  background-position: center 52%;
-  background-size: cover;
-  background-repeat: no-repeat;
+  padding: clamp(1.7rem, 3.6vw, 3rem) 0;
+  background:
+    radial-gradient(44rem 24rem at 90% -12%, rgba(240, 199, 104, 0.16), transparent 62%),
+    linear-gradient(135deg, var(--emerald-dark) 0%, var(--emerald-deep) 56%, #0b4a37 100%);
   color: #ffffff;
   border-bottom: 3px solid var(--gold);
 }
 
-.hero-compact {
+.hero-grid {
   position: relative;
   z-index: 1;
-  max-width: 860px;
+  display: grid;
+  gap: clamp(0.9rem, 2vw, 1.6rem);
+  align-items: center;
+}
+
+.hero-copy {
+  min-width: 0;
   margin-inline: auto;
+  max-width: 44rem;
   text-align: center;
+}
+
+@media (min-width: 920px) {
+  .hero-grid {
+    grid-template-columns: minmax(0, 1.06fr) minmax(0, 0.94fr);
+    gap: clamp(2rem, 4vw, 3.6rem);
+  }
+  .hero-copy { max-width: none; text-align: left; }
+  .hero-compact .hero-actions { justify-content: flex-start; }
+  .hero-compact .hero-kicker-compact { margin-inline: 0; }
 }
 
 .hero-kicker-compact {
   display: inline-flex;
   align-items: center;
-  gap: 0.55rem;
-  margin-bottom: 1rem;
-  padding: 0.35rem 0.95rem;
+  gap: 0.5rem;
+  margin: 0 0 0.6rem;
+  padding: 0.24rem 0.75rem;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.12);
-  border: 1px solid rgba(255, 255, 255, 0.25);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.22);
   color: #fff3cf;
-  font-size: 0.82rem;
+  font-size: 0.7rem;
   font-weight: 700;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.05em;
 }
 
 .hero-kicker-dot {
-  width: 0.55rem;
-  height: 0.55rem;
+  width: 0.45rem;
+  height: 0.45rem;
   border-radius: 50%;
   background: var(--gold);
   box-shadow: 0 0 8px rgba(245, 199, 86, 0.8);
 }
 
-.hero-compact h1 {
+.home-hero h1 {
   color: #ffffff;
-  font-size: clamp(2.2rem, 5.2vw, 3.8rem);
+  margin-bottom: 0.28rem;
+  font-size: clamp(1.72rem, 3.4vw, 2.9rem);
   font-weight: 800;
   line-height: 1.22;
   letter-spacing: -0.015em;
-  margin-bottom: 0.35rem;
-  text-shadow: 0 2px 16px rgba(0, 0, 0, 0.4);
+  text-shadow: 0 2px 14px rgba(0, 0, 0, 0.3);
 }
 
 .hero-sub-en {
-  margin-bottom: 1.1rem;
+  margin-bottom: 0.6rem;
   color: #d6eadc;
-  font-size: clamp(1.05rem, 2.2vw, 1.35rem);
+  font-size: clamp(0.94rem, 1.6vw, 1.16rem);
   font-weight: 600;
   letter-spacing: 0.02em;
 }
 
-.hero-compact .lead {
-  max-width: 680px;
+.hero-lead {
+  max-width: 46ch;
   margin-inline: auto;
-  margin-bottom: 1.25rem;
-  color: rgba(255, 255, 255, 0.95);
-  font-size: clamp(1.05rem, 1.9vw, 1.2rem);
-  line-height: 1.85;
-  text-shadow: 0 1px 10px rgba(0, 0, 0, 0.3);
+  margin-bottom: 0.7rem;
+  color: rgba(255, 255, 255, 0.93);
+  font-size: clamp(0.92rem, 1.3vw, 1.06rem);
+  line-height: 1.7;
+  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.25);
 }
 
-.hero-compact .hero-location {
-  display: inline-flex;
+/* Phones: keep the hero above the fold — clamp the tagline to two lines */
+@media (max-width: 639px) {
+  .home-hero { padding: 1.35rem 0 1.5rem; }
+  .hero-kicker-compact { margin-bottom: 0.45rem; }
+  .home-hero h1 { margin-bottom: 0.2rem; }
+  .hero-sub-en { margin-bottom: 0.45rem; }
+  .hero-lead {
+    margin-bottom: 0.55rem;
+    font-size: 0.95rem;
+    line-height: 1.6;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .hero-location { margin-bottom: 0.8rem; font-size: 0.8rem; }
+  .hero-actions { margin-bottom: 0.55rem; }
+  .hero-media { margin-top: 0; }
+}
+
+@media (min-width: 920px) { .hero-lead { margin-inline: 0; } }
+
+.hero-location {
+  display: flex;
   align-items: center;
   justify-content: center;
-  gap: 0.5rem;
-  margin: 0 auto 1.8rem;
-  padding: 0.4rem 1.05rem;
-  border-radius: 999px;
-  background: rgba(0, 0, 0, 0.26);
-  border: 1px solid rgba(255, 255, 255, 0.16);
+  gap: 0.4rem;
+  margin: 0 0 1.05rem;
   color: #fff7e0;
-  font-size: 0.94rem;
+  font-size: 0.85rem;
   font-weight: 600;
+  line-height: 1.5;
 }
 
-.hero-compact .location-pin {
-  width: 1.15rem;
-  height: 1.15rem;
+@media (min-width: 920px) {
+  .hero-location { justify-content: flex-start; margin-bottom: 1.35rem; }
+}
+
+.hero-location .location-pin {
+  flex: 0 0 auto;
+  width: 1rem;
+  height: 1rem;
   color: #f5c756;
 }
 
-.hero-compact .hero-actions {
+.hero-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.85rem;
+  gap: 0.7rem;
   justify-content: center;
   align-items: center;
+  margin-bottom: 0.35rem;
 }
 
-/* Notice strip and utility cards */
-.notice-strip {
-  border-block: 1px solid rgba(15, 90, 67, 0.16);
-  color: #e9f5ed;
-  background: var(--emerald-deep);
+@media (min-width: 920px) {
+  .hero-actions { justify-content: flex-start; gap: 0.85rem; margin-bottom: 0; }
+  .home-hero .btn { min-height: 47px; padding: 0.8rem 1.35rem; }
 }
 
-.notice-strip-inner {
+/* School photo card beside the hero copy (below it on small screens) */
+.hero-media {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  border-color: rgba(255, 255, 255, 0.24);
+  background: rgba(4, 26, 19, 0.35);
+  box-shadow: 0 22px 52px rgba(3, 24, 17, 0.45);
+}
+
+.hero-media img {
+  aspect-ratio: 16 / 7.4;
+  object-fit: cover;
+}
+
+.hero-media figcaption { display: none; }
+
+@media (min-width: 640px) {
+  .hero-media { border-radius: var(--radius); }
+  .hero-media img { aspect-ratio: 16 / 9.2; }
+}
+
+@media (min-width: 920px) {
+  .hero-media { border-radius: var(--radius-lg); }
+  .hero-media img { aspect-ratio: 4 / 3; }
+  .hero-media figcaption {
+    display: block;
+    color: var(--muted);
+    background: rgba(255, 255, 255, 0.94);
+  }
+}
+
+/* Latest notice card — overlaps the hero for immediate visibility */
+.home-notice {
+  position: relative;
+  z-index: 2;
+  margin-top: -1.1rem;
+}
+
+@media (min-width: 640px) { .home-notice { margin-top: -1.5rem; } }
+
+.home-notice-card {
   display: grid;
-  grid-template-columns: auto 1fr;
-  align-items: center;
-  gap: 0.7rem 0.9rem;
-  padding: 0.85rem 0;
+  gap: 0.4rem 0.95rem;
+  padding: 0.95rem 1.05rem;
+  border: 1px solid rgba(174, 125, 41, 0.42);
+  border-left: 4px solid var(--gold);
+  border-radius: var(--radius-sm);
+  background: linear-gradient(130deg, #fffdf8, #fbf4e2);
+  box-shadow: var(--shadow);
+}
+
+@media (min-width: 920px) {
+  .home-notice-card {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    padding: 1.05rem 1.35rem;
+    gap: 1.4rem;
+  }
 }
 
 .notice-label {
   display: inline-flex;
   align-items: center;
   width: fit-content;
-  min-height: 27px;
-  padding: 0.26rem 0.58rem;
-  border: 1px solid rgba(242, 201, 93, 0.6);
+  min-height: 25px;
+  padding: 0.24rem 0.62rem;
+  border: 1px solid rgba(174, 125, 41, 0.5);
   border-radius: 999px;
-  color: #fff3cf;
-  font-size: 0.66rem;
+  color: #765413;
+  background: var(--gold-pale);
+  font-size: 0.64rem;
   font-weight: 800;
   letter-spacing: 0.09em;
   line-height: 1.2;
   text-transform: uppercase;
 }
 
-.notice-strip p { margin: 0; font-size: 0.9rem; }
+.home-notice-text {
+  margin: 0;
+  color: var(--ink);
+  font-size: 0.95rem;
+  font-weight: 700;
+  line-height: 1.65;
+}
 
-.notice-strip a {
-  grid-column: 2;
+@media (min-width: 640px) { .home-notice-text { font-size: 1.02rem; } }
+
+.home-notice-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem 0.9rem;
+  margin: 0.3rem 0 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+@media (min-width: 920px) {
+  .home-notice-text,
+  .home-notice-meta { margin: 0; }
+  .home-notice-meta { margin-top: 0.15rem; }
+}
+
+.home-notice-meta span { display: inline-flex; align-items: center; gap: 0.32rem; }
+.home-notice-meta svg { width: 0.9rem; height: 0.9rem; color: var(--gold); }
+
+.home-notice-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
   width: fit-content;
-  color: #fff5d7;
-  font-size: 0.79rem;
+  color: var(--emerald);
+  font-size: 0.85rem;
   font-weight: 800;
+  text-decoration: none;
+  white-space: nowrap;
 }
 
-@media (min-width: 720px) {
-  .notice-strip-inner { grid-template-columns: auto 1fr auto; }
-  .notice-strip a { grid-column: auto; }
+.home-notice-link:hover { color: var(--emerald-deep); }
+
+@media (min-width: 920px) {
+  .home-notice-body { min-width: 0; }
+  .home-notice-text { line-height: 1.5; }
 }
+
+/* Notice strip and utility cards */
 
 .quick-grid,
 .card-grid,
@@ -1000,6 +1123,8 @@ address { font-style: normal; }
 
 .contact-detail span,
 .contact-detail address { color: var(--ink-soft); font-size: 0.95rem; }
+
+@media (min-width: 500px) { .contact-detail-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 
 @media (min-width: 650px) { .contact-detail-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 
@@ -1404,8 +1529,14 @@ address { font-style: normal; }
 /* Academics: Sohopathi school information & SSC results block */
 .result-block {
   display: grid;
+  /* Keep grid tracks inside the viewport: without minmax(0,1fr), the wide
+     table/chart min-widths propagate as min-content and force the whole
+     page to overflow horizontally on phones. */
+  grid-template-columns: minmax(0, 1fr);
   gap: clamp(1.9rem, 4.5vw, 2.8rem);
 }
+
+.ssc-anchor { scroll-margin-top: 96px; }
 
 .result-block .block-sub {
   margin-bottom: 0.95rem;
@@ -1449,13 +1580,57 @@ address { font-style: normal; }
   font-weight: 600;
 }
 
+/* Phones: keep the two-column stat cards compact and fully on-screen */
+@media (max-width: 480px) {
+  .result-stats { gap: 0.7rem; }
+  .result-stat { padding: 0.8rem 0.85rem; }
+  .result-stat .stat-value { font-size: 1.42rem; }
+  .result-stat .stat-label { font-size: 0.74rem; line-height: 1.45; }
+}
+
+.table-frame { position: relative; }
+
+.table-frame::after {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  bottom: 1px;
+  display: none;
+  width: 42px;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: linear-gradient(to left, rgba(255, 255, 255, 0.96), rgba(255, 255, 255, 0));
+  pointer-events: none;
+  content: "";
+}
+
+/* The fade only makes sense while the table needs horizontal scrolling */
+@media (max-width: 719px) { .table-frame::after { display: block; } }
+
+.table-scroll-hint {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0.15rem 0 0.55rem;
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.table-scroll-hint svg { width: 0.95rem; height: 0.95rem; color: var(--gold); }
+
+@media (min-width: 720px) { .table-scroll-hint { display: none; } }
+
 .table-wrap {
   overflow-x: auto;
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   background: var(--surface);
   box-shadow: var(--shadow-sm);
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
 }
+
+.table-wrap:focus-visible { outline-offset: 1px; }
 
 .data-table {
   width: 100%;
@@ -1500,6 +1675,7 @@ address { font-style: normal; }
 .chart-grid {
   display: grid;
   gap: 1rem;
+  grid-template-columns: minmax(0, 1fr);
 }
 
 @media (min-width: 820px) {
@@ -1507,6 +1683,7 @@ address { font-style: normal; }
 }
 
 .chart-panel {
+  min-width: 0;
   margin: 0;
   padding: 1.15rem 1.2rem 1.25rem;
   border: 1px solid var(--line);
@@ -1515,21 +1692,37 @@ address { font-style: normal; }
   box-shadow: var(--shadow-sm);
 }
 
-.chart-panel h3 { margin-bottom: 0.15rem; }
+.chart-panel h3 { margin-bottom: 0.15rem; overflow-wrap: anywhere; }
 
 .chart-note {
   margin-bottom: 0.9rem;
   color: var(--muted);
   font-size: 0.8rem;
+  overflow-wrap: anywhere;
 }
 
 .chart-scroll { overflow-x: auto; }
 
+/* Charts scale to their container at every viewport width — no fixed
+   desktop width, no page overflow; SVG label sizes adapt in the queries. */
 .chart-scroll svg {
   display: block;
   width: 100%;
-  min-width: 540px;
   height: auto;
+}
+
+.chart-scroll svg text { font-size: 12.5px; }
+
+@media (max-width: 819px) {
+  .chart-panel { padding: 1rem 0.95rem 1.1rem; }
+  .chart-scroll svg text { font-size: 15.5px; }
+}
+
+/* Phones: enlarge axis labels and thin out every other year so the
+   scaled-down chart stays readable. */
+@media (max-width: 700px) {
+  .chart-scroll svg text { font-size: 23px; }
+  .chart-panel svg .ax-x .alt { display: none; }
 }
 
 .chart-legend {
@@ -1576,3 +1769,164 @@ address { font-style: normal; }
 .source-note p { margin-bottom: 0; }
 .source-note strong { color: var(--emerald-deep); }
 .source-note a { color: var(--emerald-deep); font-weight: 700; }
+
+/* ============================================================
+   Final refinement pass — homepage hierarchy, quick facts,
+   SSC discoverability band, mobile navigation hint
+   ============================================================ */
+
+/* School quick facts strip (homepage, inside the about section) */
+.fact-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.7rem;
+  margin: clamp(1.7rem, 3.5vw, 2.5rem) 0 0;
+}
+
+@media (min-width: 640px) { .fact-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (min-width: 1020px) { .fact-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
+
+.fact {
+  min-width: 0;
+  padding: 0.8rem 0.9rem;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--gold);
+  border-radius: var(--radius-sm);
+  background: var(--surface-soft);
+}
+
+.fact dt {
+  margin-bottom: 0.14rem;
+  color: var(--muted);
+  font-size: 0.66rem;
+  font-weight: 800;
+  letter-spacing: 0.09em;
+  line-height: 1.3;
+  text-transform: uppercase;
+}
+
+.fact dd {
+  margin: 0;
+  color: var(--emerald-deep);
+  font-size: 0.95rem;
+  font-weight: 800;
+  line-height: 1.45;
+}
+
+/* Academic performance band — the SSC results discovery gateway on the homepage */
+.perf-band {
+  padding: clamp(2.6rem, 5.5vw, 4.4rem) 0;
+  border-block: 3px solid var(--gold);
+  background:
+    radial-gradient(40rem 22rem at 12% -18%, rgba(240, 199, 104, 0.13), transparent 60%),
+    linear-gradient(140deg, var(--emerald-dark) 0%, var(--emerald-deep) 60%, #0b4a37 100%);
+  color: #fff;
+}
+
+.perf-band h2 { color: #fff; }
+
+.perf-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  justify-content: space-between;
+  gap: 0.6rem 2rem;
+  margin-bottom: clamp(1.4rem, 2.6vw, 2rem);
+}
+
+.perf-note {
+  max-width: 46ch;
+  margin: 0;
+  padding-bottom: 0.15rem;
+  color: rgba(214, 234, 220, 0.85);
+  font-size: 0.83rem;
+  font-weight: 600;
+  line-height: 1.6;
+}
+
+.perf-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.8rem;
+}
+
+@media (min-width: 920px) { .perf-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1rem; } }
+
+.perf-stat {
+  min-width: 0;
+  padding: 1rem 1rem 0.95rem;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.perf-value {
+  display: block;
+  margin-bottom: 0.2rem;
+  color: #ffd978;
+  font-size: clamp(1.55rem, 3.4vw, 2.3rem);
+  font-weight: 800;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+
+.perf-label {
+  display: block;
+  color: #fff;
+  font-size: 0.88rem;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.perf-sub {
+  display: block;
+  margin-top: 0.15rem;
+  color: rgba(214, 234, 220, 0.75);
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+.perf-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.8rem 1.3rem;
+  margin-top: clamp(1.3rem, 2.6vw, 1.9rem);
+}
+
+.perf-actions .btn { min-height: 50px; padding: 0.9rem 1.55rem; font-size: 0.93rem; }
+
+.perf-src {
+  margin: 0;
+  color: rgba(214, 234, 220, 0.72);
+  font-size: 0.74rem;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+/* Discoverability hint: Academics carries the SSC results (nav + mobile menu) */
+.nav-mini-tag {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 0.4rem;
+  padding: 0.1rem 0.46rem;
+  border: 1px solid rgba(174, 125, 41, 0.5);
+  border-radius: 999px;
+  color: #765413;
+  background: var(--gold-pale);
+  font-size: 0.58rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  line-height: 1.5;
+  text-transform: uppercase;
+  white-space: nowrap;
+  vertical-align: 0.08em;
+}
+
+.main-nav .nav-mini-tag { display: none; }
+
+@media (min-width: 1280px) { .main-nav .nav-mini-tag { display: inline-flex; } }
+
+/* Hide the table edge-fade once fully scrolled to the end (progressive) */
+.table-frame.is-end::after { display: none; }
