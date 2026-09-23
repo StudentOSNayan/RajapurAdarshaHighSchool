@@ -1400,3 +1400,179 @@ address { font-style: normal; }
     animation-iteration-count: 1 !important;
   }
 }
+
+/* Academics: Sohopathi school information & SSC results block */
+.result-block {
+  display: grid;
+  gap: clamp(1.9rem, 4.5vw, 2.8rem);
+}
+
+.result-block .block-sub {
+  margin-bottom: 0.95rem;
+}
+
+.result-block .small-copy {
+  margin-bottom: 1.1rem;
+}
+
+.result-stats {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+@media (min-width: 650px) {
+  .result-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+.result-stat {
+  padding: 1.05rem 1.15rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.result-stat .stat-value {
+  display: block;
+  margin-bottom: 0.18rem;
+  color: var(--emerald-deep);
+  font-size: clamp(1.45rem, 2.8vw, 1.9rem);
+  font-weight: 800;
+  line-height: 1.15;
+  font-variant-numeric: tabular-nums;
+}
+
+.result-stat .stat-label {
+  color: var(--muted);
+  font-size: 0.83rem;
+  font-weight: 600;
+}
+
+.table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.data-table {
+  width: 100%;
+  min-width: 560px;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.data-table th,
+.data-table td {
+  padding: 0.6rem 0.85rem;
+  border-bottom: 1px solid var(--line);
+  text-align: center;
+  white-space: nowrap;
+}
+
+.data-table thead th {
+  border-bottom: 2px solid rgba(15, 90, 67, 0.28);
+  color: var(--emerald-deep);
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.data-table tbody th[scope="row"] {
+  color: var(--ink);
+  text-align: left;
+  font-weight: 800;
+}
+
+.data-table tbody tr:hover { background: var(--surface-soft); }
+
+.data-table tfoot th,
+.data-table tfoot td {
+  border-bottom: 0;
+  border-top: 2px solid rgba(15, 90, 67, 0.28);
+  background: var(--gold-pale);
+  color: var(--ink);
+  font-weight: 800;
+}
+
+.chart-grid {
+  display: grid;
+  gap: 1rem;
+}
+
+@media (min-width: 820px) {
+  .chart-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+.chart-panel {
+  margin: 0;
+  padding: 1.15rem 1.2rem 1.25rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.chart-panel h3 { margin-bottom: 0.15rem; }
+
+.chart-note {
+  margin-bottom: 0.9rem;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.chart-scroll { overflow-x: auto; }
+
+.chart-scroll svg {
+  display: block;
+  width: 100%;
+  min-width: 540px;
+  height: auto;
+}
+
+.chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem 1.15rem;
+  margin-top: 0.8rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.chart-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.chart-legend .legend-line {
+  width: 1.4rem;
+  border-top: 3px solid var(--emerald);
+}
+
+.chart-legend .legend-dash {
+  width: 1.4rem;
+  border-top: 3px dashed var(--gold);
+}
+
+.chart-legend .legend-bar {
+  width: 0.8rem;
+  height: 0.8rem;
+  border-radius: 3px;
+  background: var(--emerald);
+}
+
+.source-note {
+  padding: 0.95rem 1.1rem;
+  border-left: 3px solid var(--gold);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: var(--gold-pale);
+  color: var(--ink-soft);
+  font-size: 0.88rem;
+}
+
+.source-note p { margin-bottom: 0; }
+.source-note strong { color: var(--emerald-deep); }
+.source-note a { color: var(--emerald-deep); font-weight: 700; }
