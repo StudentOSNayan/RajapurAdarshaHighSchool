@@ -481,7 +481,10 @@ address { font-style: normal; }
     grid-template-columns: minmax(0, 1.12fr) minmax(0, 0.88fr);
     gap: clamp(1.8rem, 3.4vw, 3rem);
   }
-  .hero-copy { max-width: none; text-align: left; }
+  .hero-copy { max-width: none; text-align: left; order: 1; }
+  /* DOM leads with the photo (mobile-first); on desktop the identity text
+     takes the left column and the photo card sits beside it. */
+  .home-hero .hero-media { order: 2; }
 }
 
 .hero-kicker-compact {
@@ -574,7 +577,8 @@ address { font-style: normal; }
   .home-hero .btn { min-height: 47px; padding: 0.8rem 1.35rem; }
 }
 
-/* School photo card beside the hero copy (below it on small screens).
+/* School photo card — leads the hero on small screens (first in source order),
+   swaps to the right column on desktop via `order` below.
    Scoped with .home-hero on purpose: the generic .photo-frame rules live later
    in this file with equal specificity, and unscoped they would silently win —
    re-inflating the photo to a tall 4:3 block that dominates the hero. */
@@ -590,11 +594,13 @@ address { font-style: normal; }
 
 .home-hero .hero-media img {
   width: 100%;
-  aspect-ratio: 16 / 7.2;
-  max-height: 146px;
+  /* Compact landscape opener: ~207px tall at 360px, ~224px at 390px,
+     capped at 236px on wide phones — never a full-screen panel */
+  aspect-ratio: 16 / 10;
+  max-height: 236px;
   object-fit: cover;
-  /* The building sits low in this frame, so a short landscape crop must favour
-     the lower part of the photo — otherwise the strip would show only sky. */
+  /* The building sits low in this frame, so the crop favours the lower part
+     of the photo — otherwise it would show only sky. */
   object-position: center 80%;
 }
 
@@ -618,11 +624,12 @@ address { font-style: normal; }
   }
 }
 
-/* Phones: keep the hero above the fold — tagline clamped to two lines and
-   every vertical gap tightened so the notice card peeks into screen one.
+/* Phones: the photo opens the hero, so everything under it is tightened —
+   tagline clamped to two lines, gaps reduced — so the identity block and the
+   notice card stay within reach of the first screen.
    Placed after the base rules above so these overrides actually win. */
 @media (max-width: 639px) {
-  .home-hero { padding: 1.05rem 0 1.15rem; }
+  .home-hero { padding: 0.85rem 0 1.15rem; }
   .hero-kicker-compact { margin-bottom: 0.35rem; font-size: 0.68rem; }
   .home-hero h1 { margin-bottom: 0.15rem; }
   .hero-sub-en { margin-bottom: 0.3rem; font-size: 0.9rem; }
@@ -639,9 +646,10 @@ address { font-style: normal; }
   .hero-actions { gap: 0.55rem; }
   .home-hero .hero-actions { margin-bottom: 0.2rem; }
   .home-hero .btn { min-height: 42px; padding: 0.62rem 1rem; font-size: 0.88rem; }
-  .home-hero .hero-media { margin-top: 0.15rem; }
-  /* Short landscape strip: wide but only ~130px tall on a 360px phone */
-  .home-hero .hero-media img { aspect-ratio: 16 / 6.4; max-height: 130px; }
+  /* Photo leads the hero on phones: a compact landscape opener (~207px at
+     360px, capped at 224px) rather than a full-viewport panel */
+  .home-hero .hero-media { margin: 0; }
+  .home-hero .hero-media img { max-height: 224px; }
 }
 
 /* Latest notice card — overlaps the hero for immediate visibility */
