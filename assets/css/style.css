@@ -471,20 +471,18 @@ address { font-style: normal; }
 
 .hero-copy {
   min-width: 0;
-  margin-inline: auto;
-  max-width: 44rem;
-  text-align: center;
+  text-align: left;
 }
 
 @media (min-width: 920px) {
   .hero-grid {
-    grid-template-columns: minmax(0, 1.12fr) minmax(0, 0.88fr);
+    grid-template-columns: minmax(0, 1.22fr) minmax(0, 0.78fr);
     gap: clamp(1.8rem, 3.4vw, 3rem);
   }
-  .hero-copy { max-width: none; text-align: left; order: 1; }
-  /* DOM leads with the photo (mobile-first); on desktop the identity text
-     takes the left column and the photo card sits beside it. */
-  .home-hero .hero-media { order: 2; }
+  /* Source order is kept on desktop: the photo (which now carries the badge,
+     Bengali name and English name) is the identity block and takes the left
+     column; location, tagline and CTAs sit beside it. */
+  .hero-copy { max-width: 34rem; }
 }
 
 .hero-kicker-compact {
@@ -530,7 +528,6 @@ address { font-style: normal; }
 
 .hero-lead {
   max-width: 46ch;
-  margin-inline: auto;
   margin-bottom: 0.7rem;
   color: rgba(255, 255, 255, 0.93);
   font-size: clamp(0.92rem, 1.3vw, 1.06rem);
@@ -538,14 +535,12 @@ address { font-style: normal; }
   text-shadow: 0 1px 8px rgba(0, 0, 0, 0.25);
 }
 
-@media (min-width: 920px) { .hero-lead { margin-inline: 0; } }
-
 .hero-location {
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   gap: 0.4rem;
-  margin: 0 0 1.05rem;
+  margin: 0 0 0.9rem;
   color: #fff7e0;
   font-size: 0.85rem;
   font-weight: 600;
@@ -553,7 +548,7 @@ address { font-style: normal; }
 }
 
 @media (min-width: 920px) {
-  .hero-location { justify-content: flex-start; margin-bottom: 1.35rem; }
+  .hero-location { margin-bottom: 1.15rem; }
 }
 
 .hero-location .location-pin {
@@ -567,18 +562,19 @@ address { font-style: normal; }
   display: flex;
   flex-wrap: wrap;
   gap: 0.7rem;
-  justify-content: center;
+  justify-content: flex-start;
   align-items: center;
   margin-bottom: 0.35rem;
 }
 
 @media (min-width: 920px) {
-  .hero-actions { justify-content: flex-start; gap: 0.85rem; margin-bottom: 0; }
+  .hero-actions { gap: 0.85rem; margin-bottom: 0; }
   .home-hero .btn { min-height: 47px; padding: 0.8rem 1.35rem; }
 }
 
-/* School photo card — leads the hero on small screens (first in source order),
-   swaps to the right column on desktop via `order` below.
+/* School identity + photo share one visual block: the name sits on the image
+   over a soft emerald gradient, so the hero reads as a single hero rather than
+   an image card stacked above a text card.
    Scoped with .home-hero on purpose: the generic .photo-frame rules live later
    in this file with equal specificity, and unscoped they would silently win —
    re-inflating the photo to a tall 4:3 block that dominates the hero. */
@@ -592,29 +588,81 @@ address { font-style: normal; }
   box-shadow: 0 18px 40px rgba(3, 24, 17, 0.42);
 }
 
+/* The framed stage: image, badge and title overlay are positioned inside it */
+.home-hero .hero-photo {
+  position: relative;
+  overflow: hidden;
+}
+
 .home-hero .hero-media img {
+  display: block;
   width: 100%;
-  /* Compact landscape opener: ~207px tall at 360px, ~224px at 390px,
-     capped at 236px on wide phones — never a full-screen panel */
-  aspect-ratio: 16 / 10;
-  max-height: 236px;
+  /* Compact landscape opener, tall enough to host the overlaid name:
+     ~236px at 360px wide, capped at 240px on wider phones — never full-screen */
+  aspect-ratio: 16 / 11.4;
+  max-height: 240px;
   object-fit: cover;
-  /* The building sits low in this frame, so the crop favours the lower part
-     of the photo — otherwise it would show only sky. */
-  object-position: center 80%;
+  /* The building sits low in this photo, so the crop is biased to the bottom:
+     that keeps the facade and roofline clear of the overlaid title instead of
+     showing empty sky above it. */
+  object-position: center 92%;
+}
+
+/* Official-website badge, pinned inside the photo so it belongs to the image */
+.home-hero .hero-media .hero-kicker-compact {
+  position: absolute;
+  top: 0.6rem;
+  left: 0.6rem;
+  z-index: 1;
+  margin: 0;
+  background: rgba(4, 26, 19, 0.55);
+  border-color: rgba(255, 255, 255, 0.26);
+}
+
+/* School name, on the photo */
+.home-hero .hero-overlay {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 1;
+  padding: 1.6rem 0.85rem 0.7rem;
+  background: linear-gradient(to top,
+      rgba(4, 30, 22, 0.88) 0%,
+      rgba(4, 30, 22, 0.6) 44%,
+      rgba(4, 30, 22, 0.1) 80%,
+      rgba(4, 30, 22, 0) 100%);
+}
+
+.home-hero .hero-overlay h1 {
+  margin-bottom: 0.1rem;
+  font-size: clamp(1.32rem, 5.4vw, 2.9rem);
+  line-height: 1.28;
+  text-shadow: 0 1px 10px rgba(2, 18, 13, 0.55);
+}
+
+.home-hero .hero-overlay .hero-sub-en {
+  margin-bottom: 0;
+  font-size: clamp(0.84rem, 2vw, 1.1rem);
+  text-shadow: 0 1px 8px rgba(2, 18, 13, 0.5);
 }
 
 .home-hero .hero-media figcaption { display: none; }
 
 @media (min-width: 640px) {
   .home-hero .hero-media { border-radius: var(--radius); }
-  .home-hero .hero-media img { aspect-ratio: 16 / 9; max-height: 226px; }
+  .home-hero .hero-media img { aspect-ratio: 16 / 9; max-height: 262px; object-position: center 90%; }
+  .home-hero .hero-media .hero-kicker-compact { top: 0.85rem; left: 0.85rem; }
+  .home-hero .hero-overlay { padding: 2.1rem 1.15rem 0.9rem; }
 }
 
 @media (min-width: 920px) {
   .home-hero .hero-media { border-radius: var(--radius-lg); }
   /* Landscape and height-capped, so the photo can never set the hero height */
-  .home-hero .hero-media img { aspect-ratio: 16 / 9; max-height: 264px; object-position: center 62%; }
+  .home-hero .hero-media img { aspect-ratio: 16 / 9; max-height: 286px; object-position: center bottom; }
+  .home-hero .hero-media .hero-kicker-compact { top: 1rem; left: 1rem; }
+  .home-hero .hero-overlay { padding: 2.2rem 1.35rem 1.05rem; }
+  .home-hero .hero-overlay h1 { font-size: clamp(1.6rem, 2.6vw, 2.35rem); margin-bottom: 0.2rem; }
   .home-hero .hero-media figcaption {
     display: block;
     padding: 0.58rem 0.95rem;
@@ -624,15 +672,13 @@ address { font-style: normal; }
   }
 }
 
-/* Phones: the photo opens the hero, so everything under it is tightened —
-   tagline clamped to two lines, gaps reduced — so the identity block and the
-   notice card stay within reach of the first screen.
+/* Phones: the photo (with the overlaid name) opens the hero, so everything
+   under it is tightened — tagline clamped to two lines, gaps reduced — so the
+   details and the notice card stay within reach of the first screen.
    Placed after the base rules above so these overrides actually win. */
 @media (max-width: 639px) {
-  .home-hero { padding: 0.85rem 0 1.15rem; }
-  .hero-kicker-compact { margin-bottom: 0.35rem; font-size: 0.68rem; }
-  .home-hero h1 { margin-bottom: 0.15rem; }
-  .hero-sub-en { margin-bottom: 0.3rem; font-size: 0.9rem; }
+  .home-hero { padding: 0.8rem 0 1.05rem; }
+  .home-hero .hero-media .hero-kicker-compact { font-size: 0.66rem; }
   .hero-lead {
     margin-bottom: 0.5rem;
     font-size: 0.92rem;
@@ -646,10 +692,6 @@ address { font-style: normal; }
   .hero-actions { gap: 0.55rem; }
   .home-hero .hero-actions { margin-bottom: 0.2rem; }
   .home-hero .btn { min-height: 42px; padding: 0.62rem 1rem; font-size: 0.88rem; }
-  /* Photo leads the hero on phones: a compact landscape opener (~207px at
-     360px, capped at 224px) rather than a full-viewport panel */
-  .home-hero .hero-media { margin: 0; }
-  .home-hero .hero-media img { max-height: 224px; }
 }
 
 /* Latest notice card — overlaps the hero for immediate visibility */
