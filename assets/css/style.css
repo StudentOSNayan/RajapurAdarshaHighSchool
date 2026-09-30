@@ -234,8 +234,8 @@ address { font-style: normal; }
 .brand-mark {
   display: grid;
   flex: 0 0 auto;
-  width: 42px;
-  height: 42px;
+  width: 52px;
+  height: 52px;
   place-items: center;
   border: 1px solid rgba(174, 125, 41, 0.55);
   border-radius: 50%;
@@ -244,6 +244,14 @@ address { font-style: normal; }
   font-family: var(--font-bn);
   font-size: 1.18rem;
   font-weight: 800;
+}
+
+/* A step up once the inline navigation has enough room to share the row with a
+   larger seal; in the 1120-1279px band where the nav first appears the 52px
+   mark keeps the school name from being squeezed. Header min-height is
+   deliberately left untouched — the logo grows inside the existing row. */
+@media (min-width: 1280px) {
+  .brand-mark { width: 56px; height: 56px; }
 }
 
 /* Official school logo, reused exactly as uploaded. The mark box is square and
@@ -383,9 +391,19 @@ address { font-style: normal; }
 
 @media (max-width: 440px) {
   .header-inner { min-height: 68px; }
-  .brand-mark { width: 38px; height: 38px; }
+  /* Tighten the brand gap by ~2px so the larger seal costs the school name
+     almost nothing: it keeps its full 225px cap from ~370px up */
+  .brand { gap: 0.6rem; }
+  .brand-mark { width: 48px; height: 48px; }
   .brand-name { max-width: 225px; font-size: 0.85rem; }
   .brand-sub { display: none; }
+}
+
+/* Narrowest phones (320-360px): one step down on the seal and a tighter row gap
+   so the name and the menu button keep the room they had before this change */
+@media (max-width: 360px) {
+  .header-inner { gap: 0.6rem; }
+  .brand-mark { width: 46px; height: 46px; }
 }
 
 /* Buttons */
