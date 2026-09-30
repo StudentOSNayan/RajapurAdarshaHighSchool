@@ -246,6 +246,18 @@ address { font-style: normal; }
   font-weight: 800;
 }
 
+/* Official school logo, reused exactly as uploaded. The mark box is square and
+   the artwork is a square circular emblem, so `cover` crops nothing and the
+   aspect ratio is preserved; the existing gold ring doubles as the seal edge. */
+.brand-mark img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 50%;
+  background: #ffffff;
+}
+
 .brand-copy {
   display: grid;
   min-width: 0;
