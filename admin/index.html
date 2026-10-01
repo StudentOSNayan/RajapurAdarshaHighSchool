@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="bn">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow, noarchive">
+  <meta name="theme-color" content="#073d2d">
+  <title>কনটেন্ট ব্যবস্থাপনা | রাজাপুর আদর্শ উচ্চ বিদ্যালয়</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Bengali:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/admin/admin.css">
+</head>
+<body>
+  <a class="skip-link" href="#view">মূল অংশে যান</a>
+
+  <!-- First run and login. Hidden until /api/cms/status answers. -->
+  <div class="login-wrap" id="gate" hidden>
+    <div class="login-card">
+      <img src="/file_000000007e208211b50fdcafeeae9f2e.png" width="64" height="64" alt="রাজাপুর আদর্শ উচ্চ বিদ্যালয়ের অফিসিয়াল লোগো" decoding="async">
+      <div>
+        <h1 id="gateTitle">ওয়েবসাইট কনটেন্ট ব্যবস্থাপনা</h1>
+        <p class="lede" id="gateNote">রাজাপুর আদর্শ উচ্চ বিদ্যালয় — নোটিশ, রুটিন ও ছবি আপডেট করার জন্য শুধুমাত্র অনুমোদিত কর্মচারীর জন্য।</p>
+      </div>
+
+      <form id="loginForm" autocomplete="on">
+        <div class="field">
+          <label for="loginEmail">ইমেইল</label>
+          <input id="loginEmail" name="email" type="email" inputmode="email" autocomplete="username" required>
+        </div>
+        <div class="field">
+          <label for="loginPassword">পাসওয়ার্ড</label>
+          <input id="loginPassword" name="password" type="password" autocomplete="current-password" required>
+        </div>
+        <p class="err" id="loginError" role="alert" hidden></p>
+        <button class="btn" type="submit" id="loginSubmit">প্রবেশ করুন</button>
+      </form>
+
+      <!-- Shown only on a brand-new install, while CMS_ALLOW_SETUP=1. -->
+      <form id="setupForm" hidden>
+        <p class="lede">এখনো কোনো অ্যাকাউন্ট তৈরি হয়নি — নিচে প্রথম (অ্যাডমিন) অ্যাকাউন্টটি তৈরি করুন।</p>
+        <div class="field">
+          <label for="setupName">পদবিধি / নাম</label>
+          <input id="setupName" name="full_name" type="text" autocomplete="name" required>
+        </div>
+        <div class="field">
+          <label for="setupEmail">ইমেইল</label>
+          <input id="setupEmail" name="email" type="email" autocomplete="username" required>
+        </div>
+        <div class="field">
+          <label for="setupPassword">পাসওয়ার্ড (অন্তত ১০ অক্ষর)</label>
+          <input id="setupPassword" name="password" type="password" autocomplete="new-password" required>
+        </div>
+        <p class="err" id="setupError" role="alert" hidden></p>
+        <button class="btn" type="submit">অ্যাকাউন্ট তৈরি করুন</button>
+      </form>
+    </div>
+  </div>
+
+  <header class="topbar" id="appbar" hidden>
+    <a class="topbar-brand" href="#/">
+      <img src="/file_000000007e208211b50fdcafeeae9f2e.png" width="36" height="36" alt="" decoding="async">
+      <span>রাজাপুর আদর্শ উচ্চ বিদ্যালয়<small>কনটেন্ট ব্যবস্থাপনা</small></span>
+    </a>
+    <p class="topbar-user" id="whoami"></p>
+    <button class="btn btn-quiet btn-small" type="button" id="logoutButton">প্রস্থান (Logout)</button>
+  </header>
+
+  <nav class="tabs" id="tabs" aria-label="প্রশাসন মেনু" hidden>
+    <a class="tab" href="#/">ড্যাশবোর্ড</a>
+    <a class="tab" href="#/notices">নোটিশ</a>
+    <a class="tab" href="#/exams">পরীক্ষার রুটিন</a>
+    <a class="tab" href="#/routines">অন্যান্য রুটিন</a>
+    <a class="tab" href="#/gallery">গ্যালারি / ছবি</a>
+    <a class="tab" href="#/accounts" id="tabAccounts" hidden>অ্যাকাউন্ট</a>
+    <a class="tab" href="#/account">আমার অ্যাকাউন্ট</a>
+    <a class="tab tab-danger" href="#" id="logoutTab">প্রস্থান</a>
+  </nav>
+
+  <main id="view" tabindex="-1" hidden></main>
+
+  <dialog id="confirmDialog" aria-labelledby="confirmTitle">
+    <h2 id="confirmTitle">নিশ্চিত করুন</h2>
+    <p id="confirmBody"></p>
+    <div class="field" id="confirmTypeField" hidden>
+      <label for="confirmWord">নিশ্চিত করতে <b>DELETE</b> লিখুন</label>
+      <input id="confirmWord" type="text" autocomplete="off" spellcheck="false">
+    </div>
+    <div class="form-foot">
+      <button class="btn btn-danger" type="button" id="confirmYes">হ্যাঁ, করুন</button>
+      <button class="btn btn-quiet" type="button" id="confirmNo">বাতিল</button>
+    </div>
+  </dialog>
+
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+  <div class="sr-only" id="live" role="status" aria-live="polite"></div>
+
+  <script src="/admin/admin.js" type="module"></script>
+</body>
+</html>

@@ -1,0 +1,263 @@
+#!/usr/bin/env node
+/* Drives the real admin screens in jsdom against the real API.
+ *
+ * Everything the Computer Teacher clicks — login, dashboard, the notice form,
+ * publishing, the gallery uploader — is exercised here in order, so a typo in
+ * admin.js or a mismatch between the form and the server fails this test rather
+ * than surprising the school.
+ *
+ *   cd tools && npm install && npm run test:admin
+ */
+
+import { spawn } from "node:child_process";
+import { promises as fs } from "node:fs";
+import path from "node:path";
+import os from "node:os";
+import { JSDOM } from "jsdom";
+
+const ROOT = path.join(path.dirname(new URL(import.meta.url).pathname), "..");
+const PORT = 8300 + Math.floor(Math.random() * 60);
+const BASE = `http://127.0.0.1:${PORT}`;
+
+const results = [];
+const check = async (name, fn) => {
+  try {
+    await fn();
+    results.push({ name, pass: true });
+    console.log(`  ok   ${name}`);
+  } catch (error) {
+    results.push({ name, pass: false, detail: error?.message || String(error) });
+    console.log(` FAIL  ${name} — ${error?.message || error}`);
+  }
+};
+const assert = (condition, message) => {
+  if (!condition) throw new Error(message);
+};
+
+const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "rahs-admin-"));
+const server = spawn(process.execPath, [path.join(ROOT, "tools/dev-server.mjs")], {
+  env: {
+    ...process.env,
+    PORT: String(PORT),
+    HOST: "127.0.0.1",
+    CMS_DRIVER: "local",
+    CMS_ALLOW_LOCAL_DRIVER: "1",
+    CMS_ALLOW_SETUP: "1",
+    CMS_LOCAL_DIR: tempDir,
+  },
+  stdio: ["ignore", "pipe", "pipe"],
+});
+let log = "";
+server.stderr.on("data", (chunk) => (log += chunk));
+
+const waitFor = async (predicate, tries = 60) => {
+  for (let attempt = 0; attempt < tries; attempt += 1) {
+    if (await predicate()) return true;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  return false;
+};
+
+const click = (dom, selector, label) => {
+  const nodes = [...dom.window.document.querySelectorAll(selector)];
+  const node = label ? nodes.find((candidate) => candidate.textContent.includes(label)) : nodes[0];
+  if (!node) throw new Error(`no element for ${selector}${label ? ` containing “${label}”` : ""}`);
+  node.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }));
+  return node;
+};
+
+const setValue = (dom, selector, value) => {
+  const node = dom.window.document.querySelector(selector);
+  if (!node) throw new Error(`no input ${selector}`);
+  node.value = value;
+  node.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  return node;
+};
+
+try {
+  assert(await waitFor(async () => {
+    try {
+      return (await fetch(`${BASE}/api/public/health`)).ok;
+    } catch {
+      return false;
+    }
+  }), "dev server did not start: " + log);
+
+  const html = await (await fetch(`${BASE}/admin/`)).text();
+  const dom = new JSDOM(html, { url: `${BASE}/admin/`, runScripts: "outside-only", pretendToBeVisual: true });
+  dom.window.fetch = (input, init = {}) =>
+    fetch(new URL(input, BASE), {
+      ...init,
+      headers: { ...(init.headers || {}), origin: BASE, cookie: dom.window.document.cookie },
+    });
+  dom.window.XMLHttpRequest = undefined; // uploads are covered by the API test suite
+  const adminScript = await fs.readFile(path.join(ROOT, "admin/admin.js"), "utf8");
+
+  // jsdom does not persist HttpOnly cookies, so mirror them manually for the app.
+  const originalFetch = dom.window.fetch;
+  dom.window.fetch = async (input, init = {}) => {
+    const response = await originalFetch(input, init);
+    for (const value of response.headers.getSetCookie?.() ?? []) {
+      const [pair] = value.split(";");
+      const [name] = pair.split("=");
+      if (!/HttpOnly/i.test(value) || name === "rahs_csrf") dom.window.document.cookie = `${pair}; path=/`;
+      else dom.window.document.cookie = `${pair}; path=/`; // jsdom ignores HttpOnly on write
+    }
+    return response;
+  };
+
+  dom.window.eval(adminScript);
+  await waitFor(async () => !dom.window.document.getElementById("gate").hidden);
+
+  console.log("\n— gate —");
+  await check("a fresh install shows the first-run setup form, not the login form", () => {
+    assert(!dom.window.document.getElementById("setupForm").hidden, "setup form hidden");
+    assert(dom.window.document.getElementById("loginForm").hidden, "login form should be hidden before setup");
+  });
+
+  console.log("\n— first-run account —");
+  await check("setup creates the account and enters the dashboard", async () => {
+    setValue(dom, "#setupName", "কম্পিউটার শিক্ষক");
+    setValue(dom, "#setupEmail", "teacher@school.edu");
+    setValue(dom, "#setupPassword", "bidyalaya-2026");
+    click(dom, "#setupForm button[type=submit]");
+    assert(
+      await waitFor(async () => {
+        const viewNode = dom.window.document.getElementById("view");
+        return viewNode && !viewNode.hidden && viewNode.textContent.includes("ড্যাশবোর্ড");
+      }),
+      `dashboard never rendered. view="${dom.window.document.getElementById("view")?.textContent?.slice(0, 160)}" log=${log.slice(-500)}`,
+    );
+  });
+  await check("top bar shows the signed-in teacher and logout", () => {
+    assert(dom.window.document.getElementById("whoami").textContent.includes("কম্পিউটার শিক্ষক"), dom.window.document.getElementById("whoami").textContent);
+    assert(!dom.window.document.getElementById("tabAccounts").hidden, "admin should see the accounts tab");
+  });
+  await check("dashboard lists counts for every managed section", () => {
+    const text = dom.window.document.getElementById("view").textContent;
+    for (const label of ["নোটিশ", "পরীক্ষার রুটিন", "অন্যান্য রুটিন", "গ্যালারি"]) {
+      assert(text.includes(label), `missing ${label} on the dashboard`);
+    }
+    assert(dom.window.document.querySelectorAll("#view .stat").length === 4, "expected four stat cards");
+  });
+
+  console.log("\n— notices workflow —");
+  await check("the new-notice form is built from the server schema", async () => {
+    dom.window.location.hash = "#/notices/new";
+    dom.window.dispatchEvent(new dom.window.Event("hashchange"));
+    assert(
+      await waitFor(() => dom.window.document.querySelector("#view form [data-field=title]")),
+      `form did not appear: ${dom.window.document.getElementById("view").textContent.slice(0, 200)}`,
+    );
+    const form = dom.window.document.querySelector("#view form");
+    for (const name of ["title", "body", "audience", "notice_type", "importance", "published_at", "status", "file"]) {
+      assert(form.querySelector(`[data-field="${name}"]`), `missing field ${name}`);
+    }
+    assert(form.querySelector('[data-field="published_at"] input').value.match(/^\d{4}-\d{2}-\d{2}$/), "publication date should default to today");
+    const types = [...form.querySelectorAll('[data-field="notice_type"] option')].map((option) => option.textContent);
+    assert(types.includes("পরীক্ষা") && types.includes("ফলাফল"), `type options: ${types.join(",")}`);
+  });
+  await check("a draft saved from the form stays off the public site", async () => {
+    setValue(dom, '#view [data-field="title"] input', "নবম শ্রেণির অর্ধ-বার্ষিক পরীক্ষার রুটিন");
+    setValue(dom, '#view [data-field="body"] textarea', "২০ অক্টোবর থেকে পরীক্ষা শুরু হবে।\\nশিক্ষার্থীদের অ্যাডমিট কার্ড আনতে হবে।".replace(/\\\\n/g, "\n"));
+    setValue(dom, '#view [data-field="audience"] input', "নবম শ্রেণি");
+    click(dom, "#view .form-foot button", "সংরক্ষণ করুন");
+    assert(
+      await waitFor(async () => {
+        const { json } = await (await fetch(`${BASE}/api/cms/notices`, { headers: { cookie: dom.window.document.cookie } })).json().then((body) => ({ json: body }));
+        return json?.items?.length === 1;
+      }),
+      `notice not created: ${log.slice(-400)}`,
+    );
+    const feed = await (await fetch(`${BASE}/api/public/notices`)).json();
+    assert(feed.notices.length === 0, "a draft must not be visible publicly");
+  });
+  await check("publishing from the list makes it public", async () => {
+    dom.window.location.hash = "#/notices";
+    dom.window.dispatchEvent(new dom.window.Event("hashchange"));
+    assert(await waitFor(() => dom.window.document.querySelector('#view .row [data-status], #view .row .chip')), "list did not render");
+    click(dom, "#view .row-foot button", "প্রকাশ করুন");
+    assert(
+      await waitFor(async () => (await (await fetch(`${BASE}/api/public/notices`)).json()).notices.length === 1),
+      "public feed still empty after publishing",
+    );
+  });
+
+  console.log("\n— validation is shown in the form —");
+  await check("a required field left empty is refused with a field message", async () => {
+    dom.window.location.hash = "#/notices/new";
+    dom.window.dispatchEvent(new dom.window.Event("hashchange"));
+    assert(await waitFor(() => dom.window.document.querySelector('#view [data-field="body"] textarea')), "form did not reopen");
+    setValue(dom, '#view [data-field="title"] input', "খুব ছোট");
+    setValue(dom, '#view [data-field="body"] textarea', "");
+    setValue(dom, '#view [data-field="status"] select', "published");
+    const buttons = [...dom.window.document.querySelectorAll("#view .form-foot button")].map((b) => b.textContent);
+    click(dom, "#view .form-foot button", "সংরক্ষণ");
+    assert(
+      await waitFor(() => {
+        const slot = dom.window.document.querySelector('[data-field="body"] .err');
+        return slot && !slot.hidden;
+      }),
+      `no inline error for an empty body (buttons=${JSON.stringify(buttons)}; hash=${dom.window.location.hash}; toast=${JSON.stringify(dom.window.document.getElementById("toast").textContent)}; formPresent=${Boolean(dom.window.document.querySelector("#view form"))}; view=${JSON.stringify(dom.window.document.getElementById("view").textContent.slice(0, 160))})`,
+    );
+  });
+
+  console.log("\n— gallery and accounts screens —");
+  await check("album form offers the existing gallery categories", async () => {
+    dom.window.location.hash = "#/albums/new";
+    dom.window.dispatchEvent(new dom.window.Event("hashchange"));
+    assert(await waitFor(() => dom.window.document.querySelector('#view [data-field="category"] select')), "album form missing");
+    const options = [...dom.window.document.querySelectorAll('#view [data-field="category"] option')].map((option) => option.textContent);
+    assert(options.includes("শিক্ষা সফর") && options.includes("খেলাধুলা ও মাঠ"), options.join(","));
+    assert(!dom.window.document.querySelector('#view [data-field="cover_photo_id"]'), "cover photo must not be a raw id box");
+  });
+  await check("the photo screen has a multi-file picker and an upload button", async () => {
+    dom.window.location.hash = "#/albums";
+    dom.window.dispatchEvent(new dom.window.Event("hashchange"));
+    const created = await fetch(`${BASE}/api/cms/albums`, {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: BASE, cookie: dom.window.document.cookie, "x-csrf-token": /rahs_csrf=([^;]+)/.exec(dom.window.document.cookie)?.[1] ?? "" },
+      body: JSON.stringify({ title: "বার্ষিক ক্রীড়া ২০২৬", category: "sports", published_at: "2026-10-01", status: "draft" }),
+    });
+    const { item } = await created.json();
+    dom.window.location.hash = `#/albums/${item.id}/photos`;
+    dom.window.dispatchEvent(new dom.window.Event("hashchange"));
+    assert(await waitFor(() => dom.window.document.getElementById("photoFiles")), "photo screen did not load");
+    const picker = dom.window.document.getElementById("photoFiles");
+    assert(picker.multiple, "the picker must allow several photos at once");
+    assert([...dom.window.document.querySelectorAll("#view button")].some((button) => button.textContent.includes("আপলোড করুন")), "no upload button");
+    assert([...dom.window.document.querySelectorAll("#view button")].some((button) => button.textContent.includes("প্রকাশ করুন")), "no publish button");
+  });
+  await check("account screen changes a password", async () => {
+    dom.window.location.hash = "#/account";
+    dom.window.dispatchEvent(new dom.window.Event("hashchange"));
+    assert(await waitFor(() => dom.window.document.getElementById("pwNext")), "account screen missing");
+    setValue(dom, "#pwCurrent", "wrong-current-pass");
+    setValue(dom, "#pwNext", "brand-new-pass-2026");
+    click(dom, "#view button", "পাসওয়ার্ড বদলান");
+    assert(
+      await waitFor(() => /বর্তমান পাসওয়ার্ড/.test(dom.window.document.getElementById("toast").textContent)),
+      `toast said: ${JSON.stringify(dom.window.document.getElementById("toast").textContent)}`,
+    );
+    assert(dom.window.document.querySelectorAll("#pwCurrent, #pwNext").length === 2, "password inputs missing");
+  });
+  await check("logout returns to the login gate", async () => {
+    click(dom, "#logoutButton");
+    assert(await waitFor(() => !dom.window.document.getElementById("gate").hidden), "gate never came back");
+    assert(dom.window.document.getElementById("setupForm").hidden, "after setup the login form should show, not setup");
+  });
+} catch (error) {
+  results.push({ name: "harness", pass: false, detail: error?.stack || String(error) });
+  console.error(error);
+} finally {
+  server.kill("SIGTERM");
+  await fs.rm(tempDir, { recursive: true, force: true });
+}
+
+const failed = results.filter((row) => !row.pass);
+if (log.includes("Error")) console.log("\n— server stderr tail —\n" + log.slice(-1500));
+console.log(`\n${results.length - failed.length}/${results.length} checks passed`);
+if (failed.length) {
+  console.log("\nfailures:\n" + failed.map((row) => `  ✗ ${row.name} — ${row.detail}`).join("\n"));
+  process.exitCode = 1;
+}

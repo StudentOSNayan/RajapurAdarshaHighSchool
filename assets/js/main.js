@@ -72,7 +72,9 @@
   if (!gallery) return;
 
   const filterButtons = Array.from(gallery.querySelectorAll("[data-filter]"));
-  const galleryItems = Array.from(gallery.querySelectorAll("[data-gallery-item]"));
+  // Queried live, not snapshotted, so photos published from the admin dashboard
+  // take part in filtering and lightbox navigation as soon as they appear.
+  const galleryItems = () => Array.from(gallery.querySelectorAll("[data-gallery-item]"));
   const status = document.getElementById("galleryStatus");
   const dialog = document.getElementById("lightbox");
   const dialogImage = document.getElementById("lightboxImage");
@@ -86,7 +88,7 @@
   let activeItem = null;
   let lastTrigger = null;
 
-  const visibleItems = () => galleryItems.filter((item) => !item.hidden);
+  const visibleItems = () => galleryItems().filter((item) => !item.hidden);
 
   const announceCount = () => {
     if (!status) return;
@@ -97,7 +99,7 @@
   const applyFilter = (filter) => {
     activeFilter = filter;
 
-    galleryItems.forEach((item) => {
+    galleryItems().forEach((item) => {
       const tags = (item.dataset.tags || "").split(" ");
       item.hidden = filter !== "all" && !tags.includes(filter);
     });
@@ -165,9 +167,11 @@
     populateDialog(items[nextIndex]);
   };
 
-  galleryItems.forEach((item) => {
-    const trigger = item.querySelector("[data-gallery-open]");
-    trigger?.addEventListener("click", () => openDialog(item, trigger));
+  gallery.addEventListener("click", (event) => {
+    const trigger = event.target.closest("[data-gallery-open]");
+    if (!trigger) return;
+    const item = trigger.closest("[data-gallery-item]");
+    if (item) openDialog(item, trigger);
   });
 
   closeButton?.addEventListener("click", closeDialog);
@@ -200,4 +204,8 @@
   });
 
   applyFilter(activeFilter);
+
+  // Published content is fetched after this script runs; re-apply the current
+  // filter so freshly added photos respect it (and are counted out loud).
+  document.addEventListener("site-content:gallery", () => applyFilter(activeFilter));
 })();

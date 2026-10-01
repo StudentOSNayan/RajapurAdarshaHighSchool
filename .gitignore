@@ -23,3 +23,13 @@ originals/
 *.screenshot.png
 playwright-report/
 test-results/
+
+# CMS local development state (JSON store + uploaded files). Never commit.
+.cms-data/
+
+# Real credentials — only .env.example is versioned.
+.env
+.env.*
+!.env.example
+.vercel/
+

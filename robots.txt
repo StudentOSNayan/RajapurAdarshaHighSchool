@@ -1,0 +1,6 @@
+# robots.txt — রাজাপুর আদর্শ উচ্চ বিদ্যালয়
+# Public site is fully crawlable; the admin dashboard is never indexed.
+User-agent: *
+Allow: /
+Disallow: /admin
+Disallow: /api/

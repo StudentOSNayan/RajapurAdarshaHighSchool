@@ -1,0 +1,7 @@
+# Development tooling and local state are not part of the deployed site.
+# The site itself (HTML/CSS/JS/images) and /api are still deployed as before.
+tools/
+.cms-data/
+.env
+.env.local
+cms/SETUP.md
