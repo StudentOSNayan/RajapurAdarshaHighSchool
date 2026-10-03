@@ -10,22 +10,19 @@ import { HttpError } from "../http.mjs";
 
 /* Server-only tables and the columns that may leave the driver. Anything not
  * listed here (password hashes, raw session tokens) is filtered out on read. */
-const PRIVILEGED = {
+/** Exported only so tools/ can assert these columns exist in supabase/schema.sql. */
+export const PRIVILEGED = {
   cms_users: {
     read: ["id", "email", "full_name", "role", "is_active", "last_login_at", "created_at", "updated_at"],
     all: ["id", "email", "full_name", "role", "password_hash", "is_active", "failed_attempts", "locked_until", "last_login_at", "created_at", "updated_at"],
   },
   cms_sessions: {
-    read: ["id", "user_id", "token_hash", "created_at", "expires_at", "last_seen_at"],
-    all: ["id", "user_id", "token_hash", "ip", "user_agent", "created_at", "expires_at", "last_seen_at"],
+    read: ["id", "user_id", "token_hash", "created_at", "expires_at"],
+    all: ["id", "user_id", "token_hash", "ip", "user_agent", "created_at", "expires_at"],
   },
   cms_audit: {
     read: ["id", "user_id", "user_email", "action", "entity", "entity_id", "detail", "created_at"],
     all: ["id", "user_id", "user_email", "action", "entity", "entity_id", "detail", "created_at"],
-  },
-  cms_login_attempts: {
-    read: ["id", "key", "attempted_at", "success"],
-    all: ["id", "key", "attempted_at", "success"],
   },
 };
 

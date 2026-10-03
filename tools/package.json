@@ -7,7 +7,8 @@
     "dev": "node dev-server.mjs",
     "test": "node selftest.mjs",
     "test:public": "node test-public-render.mjs",
-    "test:admin": "node test-admin-ui.mjs"
+    "test:admin": "node test-admin-ui.mjs",
+    "test:config": "node test-config-validation.mjs"
   },
   "devDependencies": {
     "jsdom": "^24.0.0"

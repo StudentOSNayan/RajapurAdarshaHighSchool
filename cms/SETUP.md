@@ -45,10 +45,17 @@ Vercel → your project → **Settings → Environment Variables** → add both 
 
 Then **Deployments → … → Redeploy** so the functions pick them up.
 
+Both key formats are accepted, because Supabase publishes two: the legacy JWT whose
+payload says `role: "service_role"`, and the current `sb_secret_…` key. What the API
+refuses is a *public* credential used as a server one — an `anon` JWT or an
+`sb_publishable_…` key — and anything that cannot be read at all (a truncated paste),
+which it reports by length rather than by echoing your key. Quotes, spaces, a stray
+`Bearer ` prefix or a copied `/rest/v1` suffix are cleaned up before checking, so a
+correct key pasted imperfectly still works.
+
 Check it worked: open `https://<your-domain>/api/public/health`.
 You should get JSON with `"configProblems": []`. If the list is not empty, it names
-exactly what is missing (typical mistake: the `anon` key pasted instead of the
-`service_role` one — the API refuses that and says so).
+exactly what is missing.
 
 ## 3. Create the first admin account (one deploy only)
 
@@ -108,6 +115,7 @@ still serves the public site alone, but `/api` needs Node, so use `npm run dev`.
 ```bash
 cd tools
 npm test             # 55 API + security + dashboard checks (no npm packages needed)
+npm run test:config  # 16 checks: service-role key validation + drivers vs schema.sql
 npm run test:public  # 18 checks: the real pages render CMS content into the approved markup
 npm run test:admin   # 12 checks: the teacher's actual clicks, end to end
 ```

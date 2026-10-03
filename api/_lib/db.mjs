@@ -150,7 +150,6 @@ export class Store {
   sessions = {
     create: (row) => this.driver.privileged("insert", { table: "cms_sessions", row }),
     byToken: (tokenHash) => this.driver.privileged("one", { table: "cms_sessions", where: [{ col: "token_hash", op: "eq", value: tokenHash }] }),
-    touch: (id) => this.driver.privileged("update", { table: "cms_sessions", id, patch: { last_seen_at: new Date().toISOString() } }),
     drop: (tokenHash) => this.driver.privileged("delete", { table: "cms_sessions", where: [{ col: "token_hash", op: "eq", value: tokenHash }] }),
     dropForUser: (userId) => this.driver.privileged("delete", { table: "cms_sessions", id: undefined, where: [{ col: "user_id", op: "eq", value: userId }] }),
     prune: () => this.driver.privileged("delete", { table: "cms_sessions", where: [{ col: "expires_at", op: "lt", value: new Date().toISOString() }] }),
@@ -159,12 +158,6 @@ export class Store {
   audit = {
     add: (row) => this.driver.privileged("insert", { table: "cms_audit", row }),
     recent: (limit = 20) => this.driver.privileged("list", { table: "cms_audit", order: [{ col: "created_at", dir: "desc" }], limit }),
-  };
-
-  attempts = {
-    recent: (key, minutes) => this.driver.privileged("list", { table: "cms_login_attempts", where: [{ col: "key", op: "eq", value: key }, { col: "attempted_at", op: "gte", value: new Date(Date.now() - minutes * 60_000).toISOString() }], limit: 50 }),
-    add: (row) => this.driver.privileged("insert", { table: "cms_login_attempts", row }),
-    clear: (key) => this.driver.privileged("delete", { table: "cms_login_attempts", where: [{ col: "key", op: "eq", value: key }] }),
   };
 }
 

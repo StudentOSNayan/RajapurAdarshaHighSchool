@@ -251,9 +251,8 @@ const MIME_BY_EXT = {
 /** Read projections for the privileged tables (never hashes or raw tokens). */
 const PRIV_COLUMNS = {
   cms_users: ["id", "email", "full_name", "role", "is_active", "last_login_at", "created_at", "updated_at"],
-  cms_sessions: ["id", "user_id", "token_hash", "created_at", "expires_at", "last_seen_at"],
+  cms_sessions: ["id", "user_id", "token_hash", "created_at", "expires_at"],
   cms_audit: ["id", "user_id", "user_email", "action", "entity", "entity_id", "detail", "created_at"],
-  cms_login_attempts: ["id", "key", "attempted_at", "success"],
 };
 
 export { moduleOnly as default } from "../guard.mjs";

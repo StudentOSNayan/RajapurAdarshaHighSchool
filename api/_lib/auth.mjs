@@ -117,12 +117,10 @@ export async function currentUser(req, providedStore) {
   }
   const user = await store.users.byId(session.user_id).catch(() => null);
   if (!user || user.is_active === false) return null;
-  // Sliding expiry + last-seen, so an active teacher is never logged out mid-job.
-  await store.driver.privileged("update", {
-    table: "cms_sessions",
-    id: session.id,
-    patch: { expires_at: new Date(Date.now() + SESSION_MAX_AGE() * 1000).toISOString(), last_seen_at: new Date().toISOString() },
-  }).catch(() => null);
+  // Sliding expiry, so an active teacher is never logged out mid-job.
+  await store.driver
+    .privileged("update", { table: "cms_sessions", id: session.id, patch: { expires_at: new Date(Date.now() + SESSION_MAX_AGE() * 1000).toISOString() } })
+    .catch(() => null);
   return { user, csrf: csrfFor(session.token_hash) };
 }
 

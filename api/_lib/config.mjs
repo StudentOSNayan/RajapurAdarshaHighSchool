@@ -19,18 +19,103 @@ const int = (value, fallback) => {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 };
 
+/**
+ * A value pasted into the Vercel dashboard often arrives still wearing its
+ * packaging: surrounding quotes, a trailing newline, a "Bearer " prefix, or
+ * percent-escaping copied out of a URL field. Neither a key nor a project URL can
+ * legitimately contain whitespace, so it is removed here — before any validation —
+ * so a correct credential is never rejected because of how it was copied.
+ */
+const normalizeKey = (value) =>
+  String(value ?? "")
+    .replace(/%3D/g, "=")
+    .replace(/%0[AD]/gi, "")
+    .replace(/\s+/g, "")
+    .replace(/^["']|["']$/g, "")
+    .replace(/^Bearer\s+/i, "")
+    .replace(/[,;]+$/, "");
+
+const normalizeUrl = (value) =>
+  String(value ?? "")
+    .replace(/\s+/g, "")
+    .replace(/^["']|["']$/g, "")
+    .replace(/\/+rest\/v1\/?$/, "")
+    .replace(/\/+$/, "");
+
+/** Read the `role` claim out of a Supabase JWT without verifying it (config sanity only). */
+const keyRole = (key) => {
+  const payload = String(key).split(".")[1];
+  if (!payload) return "";
+  try {
+    const claims = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+    return claims && typeof claims.role === "string" ? claims.role : "";
+  } catch {
+    return "";
+  }
+};
+
+/**
+ * Classifies the configured Supabase credential so a mistake can be *described*
+ * instead of reported as an opaque "unknown". The value itself is never returned,
+ * echoed or logged — only its length and which shape it has.
+ *
+ * Two formats are valid server-side credentials:
+ *   - the legacy JWT, whose payload carries `role: "service_role"`;
+ *   - the current `sb_secret_…` key, which is opaque (no JWT, no claims) and is the
+ *     secret half of Supabase's publishable/secret pair.
+ * Anything recognisable as a *public* credential (`sb_publishable_…`, `sb_anon_…`, or
+ * a JWT whose role is not `service_role`) is refused. That is the point of the check:
+ * a key that can be pasted into a browser must never be used as a server credential.
+ */
+export const describeSupabaseKey = (raw) => {
+  const key = normalizeKey(raw);
+  if (!key) return { ok: false, reason: "SUPABASE_SERVICE_ROLE_KEY is not set." };
+
+  const role = keyRole(key);
+  if (role) {
+    return role === "service_role"
+      ? { ok: true, kind: "legacy JWT" }
+      : {
+          ok: false,
+          reason:
+            `SUPABASE_SERVICE_ROLE_KEY is a JWT with role "${role}" — that is the public (anon) key. ` +
+            "Use the service_role secret key instead.",
+        };
+  }
+
+  if (/^sb_secret_/i.test(key)) return { ok: true, kind: "sb_secret key" };
+  if (/^sb_(publishable|anon|public)/i.test(key)) {
+    return {
+      ok: false,
+      reason: "SUPABASE_SERVICE_ROLE_KEY starts with sb_publishable_ — that is the public key, not the secret one.",
+    };
+  }
+
+  // Deliberately reports only the length and which known prefix was present — never
+  // any part of the secret itself.
+  const looksLikeJwt = key.startsWith("eyJ");
+  return {
+    ok: false,
+    reason:
+      `SUPABASE_SERVICE_ROLE_KEY was received (${key.length} characters${looksLikeJwt ? ", starting with the JWT header \"eyJ\"" : ""}) ` +
+      "but it is neither a decodable service_role JWT nor an sb_secret_ key. A JWT payload that cannot be read almost " +
+      "always means the value was truncated or line-wrapped while copying — paste the raw key again from " +
+      "Project Settings → API → secret key.",
+  };
+};
+
 export const config = {
   /**
    * "supabase" -> Postgres (via PostgREST) + Storage buckets. Production.
-   * "local"    -> JSON file + folder on disk. Local development / offline demo only.
+   * "local"    -> JSON file on disk. Local development / offline demo only.
    */
   driver: env.CMS_DRIVER === "local" ? "local" : "supabase",
 
   /** Set to "1" to allow the local driver outside development (used by the dev server). */
   allowLocalDriver: flag(env.CMS_ALLOW_LOCAL_DRIVER, false),
 
-  supabaseUrl: (env.SUPABASE_URL || env.NEXT_PUBLIC_SUPABASE_URL || "").replace(/\/+$/, ""),
-  supabaseServiceRoleKey: env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_SERVICE_KEY || "",
+  supabaseUrl: normalizeUrl(env.SUPABASE_URL || env.NEXT_PUBLIC_SUPABASE_URL || ""),
+  supabaseServiceRoleKey: normalizeKey(env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_SERVICE_KEY || ""),
 
   /** Storage bucket that holds uploaded gallery images and notice/routine documents. */
   storageBucket: env.CMS_STORAGE_BUCKET || "media",
@@ -52,7 +137,7 @@ export const config = {
   maxDocumentBytes: int(env.CMS_MAX_DOCUMENT_BYTES, 5 * 1024 * 1024),
   /* A Vercel Hobby function has a 10s wall clock, so one request is capped well
    * below "as much as the browser will send": batch uploads and the message below
-   * tells the teacher to send the rest in a second go. */
+   * tell the teacher to send the rest in a second go. */
   maxImagesPerUpload: int(env.CMS_MAX_IMAGES_PER_UPLOAD, 6),
   maxFormBytes: int(env.CMS_MAX_FORM_BYTES, 24 * 1024 * 1024),
 
@@ -81,17 +166,6 @@ export const isSecureRequest = (headers) => {
   return String(proto).split(",")[0].trim() === "https" || flag(env.CMS_FORCE_SECURE_COOKIES, false);
 };
 
-/** Read the `role` claim out of a Supabase JWT without verifying it (config sanity only). */
-const keyRole = (key) => {
-  const payload = String(key).split(".")[1];
-  if (!payload) return "";
-  try {
-    return JSON.parse(Buffer.from(payload, "base64url").toString("utf8")).role || "";
-  } catch {
-    return "";
-  }
-};
-
 /** Fail fast on a misconfigured production deployment instead of half-working. */
 export const assertProductionConfig = () => {
   const problems = [];
@@ -100,13 +174,8 @@ export const assertProductionConfig = () => {
   }
   if (config.driver === "supabase") {
     if (!config.supabaseUrl) problems.push("SUPABASE_URL is not set.");
-    if (!config.supabaseServiceRoleKey) problems.push("SUPABASE_SERVICE_ROLE_KEY is not set.");
-    else if (keyRole(config.supabaseServiceRoleKey) !== "service_role") {
-      // The classic setup mistake is pasting the anon key here. Refuse early.
-      problems.push(
-        `SUPABASE_SERVICE_ROLE_KEY has role "${keyRole(config.supabaseServiceRoleKey) || "unknown"}" — it must be the secret service_role key.`,
-      );
-    }
+    const described = describeSupabaseKey(config.supabaseServiceRoleKey);
+    if (!described.ok) problems.push(described.reason);
   }
   return problems;
 };
