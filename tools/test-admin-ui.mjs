@@ -133,6 +133,35 @@ try {
     assert(dom.window.document.getElementById("whoami").textContent.includes("কম্পিউটার শিক্ষক"), dom.window.document.getElementById("whoami").textContent);
     assert(!dom.window.document.getElementById("tabAccounts").hidden, "admin should see the accounts tab");
   });
+  await check("every sidebar tab routes to its own screen", async () => {
+    /* A tab whose href is not a real route falls through to the dashboard, so an
+     * admin menu can silently open the wrong section (gallery once pointed at
+     * #/gallery while the resource is #/albums). Each tab is therefore clicked
+     * from the dashboard, and must move the screen off it. */
+    const onDashboard = () => dom.window.document.querySelector("#view h1")?.textContent.trim() === "ড্যাশবোর্ড";
+    const backToDashboard = async () => {
+      dom.window.location.hash = "#/";
+      dom.window.dispatchEvent(new dom.window.Event("hashchange"));
+      assert(await waitFor(onDashboard), "the dashboard tab must open the dashboard");
+    };
+    await backToDashboard();
+    const tabs = [...dom.window.document.querySelectorAll("#tabs .tab")]
+      .map((tab) => ({ tab, href: tab.getAttribute("href") || "" }))
+      .filter(({ tab, href }) => !tab.hidden && href.startsWith("#/") && href !== "#/");
+    assert(tabs.length >= 5, `only ${tabs.length} routed tabs to check`);
+    for (const { tab, href } of tabs) {
+      dom.window.location.hash = href;
+      dom.window.dispatchEvent(new dom.window.Event("hashchange"));
+      const heading = await waitFor(() => {
+        const title = dom.window.document.querySelector("#view h1")?.textContent.trim();
+        return title && title !== "ড্যাশবোর্ড" ? title : null;
+      }, 40);
+      assert(heading, `${href} left the dashboard on screen — that href is not a route the admin knows`);
+      const active = dom.window.document.querySelector('#tabs .tab[aria-current="page"]');
+      assert(active === tab, `${href} left “${active?.textContent?.trim() || "no tab"}” marked as the current tab`);
+      await backToDashboard();
+    }
+  });
   await check("dashboard lists counts for every managed section", () => {
     const text = dom.window.document.getElementById("view").textContent;
     for (const label of ["নোটিশ", "পরীক্ষার রুটিন", "অন্যান্য রুটিন", "গ্যালারি"]) {

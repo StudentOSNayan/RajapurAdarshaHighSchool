@@ -164,6 +164,27 @@ try {
     assert(json.user.email === "head@school.edu" && json.user.isAdmin, JSON.stringify(json));
     assert(!JSON.stringify(json).includes("password"), "payload leaked a password field");
   });
+  await check("a normal admin request does not rewrite the session row", async () => {
+    /* Sliding expiry only has to move when the stamp drifts near the end of its
+     * window. Writing it on every request put a database UPDATE in front of every
+     * admin screen, so a fresh session must come back untouched here. db.json is the
+     * dev store the local driver keeps in sync, which is what this reads. */
+    const dbFile = path.join(tempDir, "db.json");
+    const sessionRow = async () => {
+      const db = JSON.parse(await fs.readFile(dbFile, "utf8"));
+      return (db.tables.cms_sessions ?? [])[0] ?? null;
+    };
+    let first = null;
+    for (let attempt = 0; attempt < 40 && !first; attempt += 1) {
+      first = await sessionRow().catch(() => null);
+      if (!first) await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    assert(first?.expires_at, `no stored session row to compare: ${JSON.stringify(first)}`);
+    await call("/api/cms/notices");
+    await call("/api/cms/dashboard");
+    const second = await sessionRow();
+    assert(second?.expires_at === first.expires_at, `a twelve-hour session was rewritten (${first.expires_at} → ${second?.expires_at}) for no reason`);
+  });
   await check("session cookie is HttpOnly + SameSite=Lax", async () => {
     const response = await fetch(`${BASE}/api/cms/login`, {
       method: "POST",

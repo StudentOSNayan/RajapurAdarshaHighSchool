@@ -117,10 +117,20 @@ export async function currentUser(req, providedStore) {
   }
   const user = await store.users.byId(session.user_id).catch(() => null);
   if (!user || user.is_active === false) return null;
-  // Sliding expiry, so an active teacher is never logged out mid-job.
-  await store.driver
-    .privileged("update", { table: "cms_sessions", id: session.id, patch: { expires_at: new Date(Date.now() + SESSION_MAX_AGE() * 1000).toISOString() } })
-    .catch(() => null);
+  /* Sliding expiry, so an active teacher is never logged out mid-job — but only
+   * when the stamp is actually near the edge of its window. Rewriting it on every
+   * request put a database UPDATE in front of every single admin screen (measured:
+   * one of the four round trips behind a tab click), to push a twelve-hour expiry
+   * twelve hours further out each time. Extending at the halfway point is the same
+   * promise with half the work: a session still expires after SESSION_HOURS of
+   * silence, and a session in use never drops below half a window left. */
+  const windowMs = SESSION_MAX_AGE() * 1000;
+  const remainingMs = session.expires_at ? new Date(session.expires_at).getTime() - Date.now() : 0;
+  if (remainingMs < windowMs / 2) {
+    await store.driver
+      .privileged("update", { table: "cms_sessions", id: session.id, patch: { expires_at: new Date(Date.now() + windowMs).toISOString() } })
+      .catch(() => null);
+  }
   return { user, csrf: csrfFor(session.token_hash) };
 }
 
