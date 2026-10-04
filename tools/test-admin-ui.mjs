@@ -240,6 +240,20 @@ try {
     assert(options.includes("শিক্ষা সফর") && options.includes("খেলাধুলা ও মাঠ"), options.join(","));
     assert(!dom.window.document.querySelector('#view [data-field="cover_photo_id"]'), "cover photo must not be a raw id box");
   });
+  await check("saving a new album lands on the photo picker, not the list", async () => {
+    // Photos can only join an album that already exists, so the album form has no
+    // file control of its own — the screen it hands over to has to be that picker.
+    setValue(dom, '#view [data-field="title"] input', "স্বর্ণ জয়ন্তী বর্ষের উদ্বোধন");
+    click(dom, "#view .form-foot button", "সংরক্ষণ করুন");
+    assert(
+      await waitFor(() => dom.window.document.getElementById("photoFiles")),
+      `the picker never appeared (hash=${dom.window.location.hash}, view=${JSON.stringify(dom.window.document.getElementById("view").textContent.slice(0, 160))})`,
+    );
+    const picker = dom.window.document.getElementById("photoFiles");
+    assert(picker.type === "file" && picker.multiple, "the album flow must end at the multi-file picker");
+    assert(dom.window.document.querySelector("#view h1").textContent.includes("ছবি:"), `not the photo screen: ${dom.window.document.querySelector("#view h1").textContent}`);
+    assert([...dom.window.document.querySelectorAll("#view .dropzone button")].some((button) => button.textContent.includes("আপলোড করুন")), "no upload button next to the picker");
+  });
   await check("the photo screen has a multi-file picker and an upload button", async () => {
     dom.window.location.hash = "#/albums";
     dom.window.dispatchEvent(new dom.window.Event("hashchange"));

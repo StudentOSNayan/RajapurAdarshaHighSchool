@@ -14,7 +14,7 @@ const RESOURCES = {
   notices: { entity: "notice", label: "নোটিশ", singular: "নোটিশ", add: "+ নতুন নোটিশ যোগ করুন", note: "ওয়েবসাইটের নোটিশ পাতায় প্রকাশিত সবার উপরে দেখানো হবে।" },
   exams: { entity: "exam", label: "পরীক্ষার রুটিন", singular: "পরীক্ষার রুটিন", add: "+ পরীক্ষার রুটিন যোগ করুন", note: "বিষয়ভিত্তিক তারিখ ও সময়; প্রকাশিতটি নোটিশ পাতায় দেখানো হবে।" },
   routines: { entity: "routine", label: "অন্যান্য রুটিন", singular: "রুটিন", add: "+ রুটিন যোগ করুন", note: "শ্রেণি রুটিন, অনুষ্ঠান, ছুটি — যেকোনো ধরনের সময়সূচি।" },
-  albums: { entity: "album", label: "গ্যালারি / অ্যালবাম", singular: "অ্যালবাম", add: "+ নতুন অ্যালবাম তৈরি করুন", note: "অ্যালবামে ছবি দিয়ে তবেই প্রকাশ করুন।" },
+  albums: { entity: "album", label: "গ্যালারি / অ্যালবাম", singular: "অ্যালবাম", add: "+ নতুন অ্যালবাম তৈরি করুন", note: "প্রথমে অ্যালবামটি সংরক্ষণ করুন — এরপর ছবি যোগ করার পর্দা খুলে যাবে, সেখানে ফোনের গ্যালারি থেকে ছবি বেছে নিন। তালিকায় প্রতিটি অ্যালবামের “ছবি” বোতাম দিয়েও যেতে পারবেন। ছবি না দিলে অ্যালবাম প্রকাশ পাবে না।" },
 };
 
 const STATUS_LABELS = { draft: "খসড়া", published: "প্রকাশিত", unpublished: "অপ্রকাশিত" };
@@ -679,12 +679,17 @@ const renderForm = async (resource, id) => {
   const save = async ({ goToList = true } = {}) => {
     const body = collectForm(fields, form);
     try {
-      if (id) await api(`/${resource}?id=${encodeURIComponent(id)}`, { method: "PATCH", body });
-      else await api(`/${resource}`, { method: "POST", body });
+      const saved = id
+        ? await api(`/${resource}?id=${encodeURIComponent(id)}`, { method: "PATCH", body })
+        : await api(`/${resource}`, { method: "POST", body });
       state.dirty = false;
       const published = body.status === "published" || item?.status === "published";
       toast(published ? "সংরক্ষিত হয়েছে এবং ওয়েবসাইটে প্রকাশিত।" : "খসড়া সংরক্ষিত হয়েছে — ওয়েবসাইটে এখনো দেখা যাচ্ছে না।");
-      if (goToList) location.hash = `#/${resource}`;
+      // A fresh album has no id to hang photos on while the form is open, so the
+      // photo picker — the very next thing an admin needs — is opened for them right
+      // after the save instead of leaving them to find the row's “ছবি” button.
+      const toPhotos = !id && resource === "albums" && saved?.item?.id;
+      if (goToList) location.hash = toPhotos ? `#/albums/${saved.item.id}/photos` : `#/${resource}`;
       return true;
     } catch (failure) {
       if (!(failure instanceof ApiError)) return false;
