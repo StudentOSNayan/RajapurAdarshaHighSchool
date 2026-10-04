@@ -110,12 +110,23 @@ The dev server uses the `local` driver: data goes to `.cms-data/` (git-ignored),
 click everything — uploads included — without a cloud account. `python3 -m http.server`
 still serves the public site alone, but `/api` needs Node, so use `npm run dev`.
 
+## URL shape rule (why actions are query parameters)
+
+Vercel maps `/api/<group>/<one segment>` onto `api/<group>/[...path].mjs` and nothing
+deeper, so `/api/cms/notices/publish` would never reach the handler on a deployment
+(it 404s as a static miss, which the dashboard shows as "অনুরোধ ব্যর্থ (HTTP 404)").
+Actions therefore ride on the query string — `POST /api/cms/notices?id=…&action=publish`
+— and storage keys on `/api/media?path=images/2026-10/<uuid>.jpg`. The older
+`/resource/action` form still resolves, for anything that already uses it.
+`npm run test:routes` keeps every dashboard and public URL one segment deep.
+
 ## Tests
 
 ```bash
 cd tools
 npm test             # 55 API + security + dashboard checks (no npm packages needed)
 npm run test:config  # 16 checks: service-role key validation + drivers vs schema.sql
+npm run test:routes  # 16 checks: every URL is routable + notice/photo/media lifecycles
 npm run test:public  # 18 checks: the real pages render CMS content into the approved markup
 npm run test:admin   # 12 checks: the teacher's actual clicks, end to end
 ```

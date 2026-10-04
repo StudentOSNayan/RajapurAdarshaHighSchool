@@ -225,7 +225,7 @@ try {
     const strip = homeDoc.querySelector('[data-cms="photo-strip"]');
     const images = strip.querySelectorAll("img");
     assert(images.length === 2, `images ${images.length}`);
-    assert([...images].every((image) => image.getAttribute("src").startsWith("/api/media/")), "not from the CMS");
+    assert([...images].every((image) => image.getAttribute("src").startsWith("/api/media?path=")), "not from the CMS");
     assert([...images].every((image) => image.getAttribute("loading") === "lazy"), "not lazy loaded");
   });
 
@@ -238,7 +238,7 @@ try {
     const first = items[0];
     assert(first.dataset.tags === "tours", `tags ${first.dataset.tags}`);
     const trigger = first.querySelector("[data-gallery-open]");
-    assert(trigger.dataset.image.startsWith("/api/media/"), "lightbox source wrong");
+    assert(trigger.dataset.image.startsWith("/api/media?path="), "lightbox source wrong");
     assert(trigger.querySelector("img").alt.length > 3, "missing alt text");
     assert(trigger.querySelector(".gallery-card-caption strong").textContent.length > 3, "missing caption");
   });

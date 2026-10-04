@@ -492,7 +492,7 @@ const renderTrashRow = (resource, row) =>
 const clip = (text, max) => (text.length > max ? `${text.slice(0, max)}…` : text);
 
 const setStatus = async (resource, id, action) => {
-  await api(`/${resource}/${action}?id=${encodeURIComponent(id)}`, { method: "POST" });
+  await api(`/${resource}?id=${encodeURIComponent(id)}&action=${action}`, { method: "POST" });
   toast(action === "publish" ? "প্রকাশিত হয়েছে — ওয়েবসাইটে দেখা যাচ্ছে।" : "ওয়েবসাইট থেকে সরানো হয়েছে।");
   route();
 };
@@ -505,13 +505,13 @@ const trashItem = async (resource, row) => {
     yesLabel: "বাতিল ঘরে নিন",
   });
   if (!yes) return;
-  await api(`/${resource}/trash?id=${encodeURIComponent(row.id)}`, { method: "POST" });
+  await api(`/${resource}?id=${encodeURIComponent(row.id)}&action=trash`, { method: "POST" });
   toast("বাতিল ঘরে রাখা হয়েছে। যেকোনো সময় ফিরিয়ে আনা যাবে।");
   route();
 };
 
 const restoreItem = async (resource, id) => {
-  await api(`/${resource}/restore?id=${encodeURIComponent(id)}`, { method: "POST" });
+  await api(`/${resource}?id=${encodeURIComponent(id)}&action=restore`, { method: "POST" });
   toast("ফিরিয়ে আনা হয়েছে।");
   route();
 };
@@ -524,7 +524,7 @@ const purgeItem = async (resource, row) => {
     yesLabel: "হ্যাঁ, চিরতরে মুছুন",
   });
   if (!yes) return;
-  await api(`/${resource}/purge?id=${encodeURIComponent(row.id)}`, { method: "POST", body: { confirm: "DELETE" } });
+  await api(`/${resource}?id=${encodeURIComponent(row.id)}&action=purge`, { method: "POST", body: { confirm: "DELETE" } });
   toast("চিরতরে মুছে ফেলা হয়েছে।");
   route();
 };
@@ -696,7 +696,7 @@ const renderForm = async (resource, id) => {
 
   const publishAfterSave = async () => {
     if (!(await save({ goToList: false }))) return;
-    await api(`/${resource}/publish?id=${encodeURIComponent(id)}`, { method: "POST" });
+    await api(`/${resource}?id=${encodeURIComponent(id)}&action=publish`, { method: "POST" });
     state.dirty = false;
     toast("প্রকাশিত হয়েছে — ওয়েবসাইটে দেখা যাচ্ছে।");
     location.hash = `#/${resource}`;
@@ -765,7 +765,7 @@ const renderAlbum = async (resource, id) => {
     if (altDefault.value.trim()) data.set("alt_text", altDefault.value.trim());
     files.slice(0, state.limits?.maxImagesPerUpload ?? 6).forEach((file) => data.append("files", file, file.name));
     try {
-      const payload = await uploadFiles("/api/cms/photos/upload", data, (percent) => (bar.firstChild.style.width = `${percent}%`));
+      const payload = await uploadFiles(`/api/cms/photos?action=upload`, data, (percent) => (bar.firstChild.style.width = `${percent}%`));
       const failedCount = payload.failed?.length ?? 0;
       toast(
         failedCount
@@ -790,7 +790,7 @@ const renderAlbum = async (resource, id) => {
       class: "btn btn-quiet btn-small",
       type: "button",
       onclick: async () => {
-        await api("/photos/update", { method: "POST", body: { id: photo.id, alt_text: alt.value, caption: caption.value } });
+        await api("/photos?action=update", { method: "POST", body: { id: photo.id, alt_text: alt.value, caption: caption.value } });
         toast("ছবির তথ্য সংরক্ষিত।");
       },
     }, "সংরক্ষণ");
@@ -823,7 +823,7 @@ const renderAlbum = async (resource, id) => {
             onclick: async () => {
               const yes = await confirmAction({ title: "ছবিটি সরান?", body: "ছবিটি বাতিল ঘরে যাবে; প্রয়োজনে ফিরিয়ে আনা যাবে।", yesLabel: "বাতিল ঘরে নিন" });
               if (!yes) return;
-              await api("/photos/trash", { method: "POST", body: { id: photo.id } });
+              await api("/photos?action=trash", { method: "POST", body: { id: photo.id } });
               toast("ছবিটি বাতিল ঘরে নেওয়া হয়েছে।");
               route();
             },
@@ -834,7 +834,7 @@ const renderAlbum = async (resource, id) => {
   };
 
   const move = async (photoId, direction) => {
-    await api("/photos/move", { method: "POST", body: { id: photoId, direction } });
+    await api("/photos?action=move", { method: "POST", body: { id: photoId, direction } });
     route();
   };
 

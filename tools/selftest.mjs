@@ -357,7 +357,7 @@ try {
     const { json } = await call("/api/public/gallery?albums=10&per_album=8");
     assert(json.albums.length === 1, `albums ${json.albums.length}`);
     assert(json.albums[0].photos.length === 3, `photos ${json.albums[0].photos.length}`);
-    assert(json.albums[0].photos.every((photo) => photo.thumb.startsWith("/api/media/")), "thumb not routed through /api/media");
+    assert(json.albums[0].photos.every((photo) => photo.thumb.startsWith("/api/media?path=")), "thumb not routed through /api/media?path=");
     assert(!JSON.stringify(json).includes("supabase") && !JSON.stringify(json).includes("service"), "storage internals leaked into payload");
   });
   await check("a published photo is publicly readable and cached", async () => {
@@ -393,8 +393,19 @@ try {
   await check("attachment is downloadable and linked from the feed", async () => {
     const { status } = await call(`/api/cms/notices?id=${noticeId}`, { method: "PATCH", body: { file: { path: pdfPath, name: "ফরম.pdf", mime: "application/pdf", bytes: 60 } } });
     assert(status === 200, `status ${status}`);
-    const media = await call(`/api/media/${pdfPath}`, { raw: true });
+    const media = await call(`/api/media?path=${encodeURIComponent(pdfPath)}`, { raw: true });
     assert(media.status === 200 && media.buffer.subarray(0, 5).toString() === "%PDF-", `media ${media.status}`);
+    // The older path-style URL must keep resolving, and the feed must hand the browser
+    // the routable query form (Vercel only routes /api/<group>/<one segment>).
+    const legacy = await call(`/api/media/${pdfPath}`, { raw: true });
+    assert(legacy.status === 200, `legacy media path ${legacy.status}`);
+    // The URL handed to the browser — by the admin screen and, when the notice is
+    // published, by the public feed — must be the routable query form.
+    const { json: adminRow } = await call(`/api/cms/notices?id=${noticeId}`);
+    assert(adminRow.item.file.url.startsWith("/api/media?path="), `admin attachment url ${JSON.stringify(adminRow.item.file)}`);
+    const { json: withFile } = await call("/api/public/notices");
+    const feedRow = withFile.notices.find((candidate) => candidate.id === noticeId);
+    if (feedRow) assert(String(feedRow.file.url).startsWith("/api/media?path="), `feed attachment url ${JSON.stringify(feedRow.file)}`);
   });
   await check("an arbitrary path cannot be smuggled as an attachment", async () => {
     const { status } = await call(`/api/cms/notices?id=${noticeId}`, { method: "PATCH", body: { file: { path: "../../etc/passwd", name: "x", mime: "text/plain", bytes: 1 } } });
@@ -430,7 +441,7 @@ try {
     assert(status === 200 && json.filesRemoved === 1, `${status} ${JSON.stringify(json)}`);
     const savedCookie = new Map(jar);
     jar.clear();
-    const media = await call(`/api/media/${pdfPath}`, { raw: true });
+    const media = await call(`/api/media?path=${encodeURIComponent(pdfPath)}`, { raw: true });
     jar.clear();
     for (const [name, value] of savedCookie) jar.set(name, value);
     assert(media.status >= 400, `deleted file still served (${media.status})`);

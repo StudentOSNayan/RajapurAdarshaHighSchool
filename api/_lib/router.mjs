@@ -113,6 +113,15 @@ const accounts = {
 
 async function handleCmsRoute(req, res, segments, query) {
   const head = segments[0] ?? "";
+  /*
+   * An action is a query parameter (`POST /api/cms/notices?action=publish&id=…`).
+   * Vercel's zero-config function routing maps /api/<group>/<one segment> onto this
+   * file and nothing deeper, so a sub-path like /api/cms/notices/publish never reaches
+   * this handler on a real deployment — it 404s as a static miss before any code runs.
+   * The older `/resource/action` form is still accepted (first wins above) so nothing
+   * that already exists breaks; tools/test-api-routes.mjs keeps the single-segment rule.
+   */
+  const action = segments[1] || query.get("action") || "";
 
   /* ---- unauthenticated ---- */
   if (head === "status") {
@@ -170,7 +179,7 @@ async function handleCmsRoute(req, res, segments, query) {
     const record = await acceptUpload(file);
     return { status: 201, body: { ok: true, file: { ...record, url: mediaUrl(record.path) }, thumbUrl: mediaUrl(record.path, thumbTransform()) } };
   }
-  if (head === "photos" && segments[1] === "upload" && req.method === "POST") {
+  if (head === "photos" && action === "upload" && req.method === "POST") {
     const parts = await parseMultipart(req, config.maxFormBytes);
     const albumId = String(parts.fields.album_id ?? query.get("album_id") ?? "");
     if (!/^[0-9a-f-]{36}$/i.test(albumId)) throw badRequest("অ্যালবাম নির্বাচন করা হয়নি।");
@@ -192,8 +201,7 @@ async function handleCmsRoute(req, res, segments, query) {
     if (!created.length) throw badRequest(failures[0]?.message || "কোনো ছবি আপলোড করা যায়নি।", undefined);
     return { status: 201, body: { ok: true, photos: created, failed: failures } };
   }
-  if (head === "photos" && segments[1] && !RESOURCES_LIST.includes(segments[1])) {
-    const action = segments[1];
+  if (head === "photos" && action && !RESOURCES_LIST.includes(action)) {
     const body = action === "delete" ? null : await readJson(req).catch(() => ({}));
     const id = String(body?.id ?? query.get("id") ?? "");
     if (action === "update") return { body: { ok: true, photo: await updatePhoto(id, body, actor) } };
@@ -206,7 +214,6 @@ async function handleCmsRoute(req, res, segments, query) {
   /* ---- content resources ---- */
   const resource = segments[0];
   if (!RESOURCES_LIST.includes(resource)) throw notFound("এই API পাথটি চেনা যায়নি।");
-  const action = segments[1];
   const id = query.get("id");
   const method = req.method.toUpperCase();
 
@@ -297,7 +304,10 @@ async function handlePublicRoute(req, res, segments, query) {
  * is allowed to see (their own drafts) — guessing a UUID is not enough.
  */
 async function handleMediaRoute(req, res, segments, query) {
-  const key = segments.join("/");
+  // /api/media?path=images/2026-10/<uuid>.jpg — one segment, because Vercel only
+  // routes /api/<group>/<one segment> to this file. The old /api/media/<key> form
+  // still resolves, and the same strict pattern validates both.
+  const key = query.get("path") || segments.join("/");
   if (!/^(images|docs)\/\d{4}-\d{2}\/[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.(jpg|png|webp|gif|pdf)$/.test(key)) {
     throw badRequest("ফাইলের ঠিকানা সঠিক নয়।");
   }

@@ -157,10 +157,21 @@ export async function deleteMedia(pathValue) {
 }
 
 /** The only URL shape a browser is ever given for a stored object. */
+/**
+ * The only media URL shape the browser is ever given: one path segment plus the
+ * object key as a query parameter. A storage key is `images/2026-10/<uuid>.jpg` —
+ * three segments — and Vercel's function routing only maps /api/media/<one segment>
+ * to the handler, so embedding the key in the path would 404 on a real deployment.
+ */
 export const mediaUrl = (pathValue, transform = null) => {
   if (!pathValue) return null;
-  const query = transform ? `?w=${transform.width}&h=${transform.height}&q=${transform.quality}` : "";
-  return `/api/media/${pathValue}${query}`;
+  const params = new URLSearchParams({ path: pathValue });
+  if (transform) {
+    params.set("w", String(transform.width));
+    params.set("h", String(transform.height));
+    params.set("q", String(transform.quality));
+  }
+  return `/api/media?${params.toString()}`;
 };
 
 export const thumbTransform = () =>
