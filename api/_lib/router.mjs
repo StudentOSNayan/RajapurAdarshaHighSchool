@@ -264,19 +264,25 @@ const isMutatingMethod = (method) => !["GET", "HEAD", "OPTIONS"].includes(String
 
 /* -------------------------------------------------------------- public routes */
 
+/** The two paging parameters a list feed understands, exactly as the browser sent them. */
+const pageQuery = (query) => ({ limit: query.get("limit"), offset: query.get("offset") });
+
 async function handlePublicRoute(req, res, segments, query) {
   const head = segments[0] ?? "";
   // Same-origin only, and cached at the edge: a school site gets thousands of views
   // of the same list, so the database is hit at most once a minute.
   const headers = { "Cache-Control": `public, s-maxage=${config.publicCacheSeconds}, stale-while-revalidate=${config.publicCacheStaleSeconds}`, "X-Robots-Tag": "noindex" };
   switch (head) {
+    // Each list answers with one page plus has_more/next_offset, so a page can offer the
+    // older rows instead of leaving them unpublished-looking. The rows themselves are the
+    // same shape they always were, and the first page is the same page it always was.
     case "notices":
-      return { body: { ok: true, notices: await publicNotices(query.get("limit")) }, headers };
+      return { body: { ok: true, ...(await publicNotices(pageQuery(query))) }, headers };
     case "exams":
     case "exam-routines":
-      return { body: { ok: true, exams: await publicExams() }, headers };
+      return { body: { ok: true, ...(await publicExams(pageQuery(query))) }, headers };
     case "routines":
-      return { body: { ok: true, routines: await publicRoutines(query.get("limit")) }, headers };
+      return { body: { ok: true, ...(await publicRoutines(pageQuery(query))) }, headers };
     case "gallery":
       return {
         body: {

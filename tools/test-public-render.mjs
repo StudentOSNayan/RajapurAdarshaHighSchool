@@ -108,6 +108,73 @@ const render = async (page, { scripts = true } = {}) => {
   return dom;
 };
 
+/**
+ * Renders a real page against a hand-written feed instead of a seeded database, so a page
+ * size, a "load older" click and an overlapping second page can be exercised exactly —
+ * without publishing a thousand rows to reach a limit. `routes` is keyed by feed name;
+ * each entry answers the first request (`?offset` absent or 0) with `first`, and any later
+ * request with `next(offset)`.
+ */
+const renderWithFeed = async (page, routes) => {
+  const html = await (await fetch(`${BASE}/${page}`)).text();
+  const errors = [];
+  const virtualConsole = new VirtualConsole();
+  virtualConsole.on("jsdomError", (event) => errors.push(String(event?.message || event)));
+  virtualConsole.on("error", (...parts) => errors.push(parts.join(" ")));
+  const dom = new JSDOM(html, { url: `${BASE}/${page}`, runScripts: "outside-only", pretendToBeVisual: true, virtualConsole });
+  dom.window.fetch = async (input) => {
+    const url = new URL(input, BASE);
+    const route = routes[url.pathname.split("/").pop()];
+    if (!route) return { ok: 404, json: async () => ({ ok: false }) };
+    const offset = Number(url.searchParams.get("offset") ?? 0);
+    const payload = offset === 0 ? route.first : (await route.next(offset));
+    return { ok: true, json: async () => payload };
+  };
+  dom.window.addEventListener("error", (event) => errors.push(event.message));
+  dom.window.eval(await fs.readFile(path.join(ROOT, "assets/js/site-content.js"), "utf8"));
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  dom.pageErrors = errors;
+  return dom;
+};
+const emptyFeed = { first: { ok: true, albums: [] } };
+const feedNotice = (id, extra = {}) => ({
+  id,
+  title: `নোটিশ ${id}`,
+  body: "পরীক্ষার জন্য নির্ধারিত সময়ে উপস্থিত থাকুন।",
+  audience: "নবম শ্রেণি",
+  type: "exam",
+  importance: "normal",
+  date: "2026-10-01",
+  date_label: "১ অক্টোবর ২০২৬",
+  file: null,
+  ...extra,
+});
+const feedExam = (id, date) => ({
+  id,
+  exam_name: `পরীক্ষা ${id}`,
+  class_name: "নবম",
+  subject: "গণিত",
+  date,
+  date_label: "১৮ নভেম্বর ২০২৬",
+  time: "10:00",
+  room: "কক্ষ ৫",
+  notes: null,
+  file: null,
+});
+const feedRoutine = (id, date) => ({
+  id,
+  title: `রুটিন ${id}`,
+  routine_type: "শ্রেণি রুটিন",
+  class_name: "নবম",
+  date,
+  date_label: date ? "১ ডিসেম্বর ২০২৬" : null,
+  start_time: "08:30",
+  end_time: "13:00",
+  description: "শীতকালীন সময়সূচি।",
+  file: null,
+});
+const recordIds = (list) => [...list.querySelectorAll("[data-cms-record]")].map((node) => node.dataset.cmsRecord);
+
 const tempUnconfigured = await fs.mkdtemp(path.join(os.tmpdir(), "rahs-unconfigured-"));
 const tempSeeded = await fs.mkdtemp(path.join(os.tmpdir(), "rahs-seeded-"));
 const tempEmpty = await fs.mkdtemp(path.join(os.tmpdir(), "rahs-empty-"));
@@ -207,6 +274,188 @@ try {
     const card = [...dom.window.document.querySelectorAll('[data-cms="notices"] .notice-card h3')].find((node) => node.textContent.includes("onerror"));
     assert(card, "title not shown as text");
     assert(card.querySelector("img") === null, "an <img> element was created from stored text");
+  });
+
+  /* ------------------------------------- a published list keeps what it published */
+
+  console.log("\n— published lists accumulate, and older pages stay reachable —");
+  const noticeList = (doc) => doc.querySelector('[data-cms="notices"]');
+  await check("every published notice is on the page, newest first, the placeholder superseded", async () => {
+    const feed = (await call("/api/public/notices")).json;
+    assert(feed.notices.length === 2, `feed has ${feed.notices.length} rows, the test expects 2`);
+    const doc = (await render("notices.html")).window.document;
+    const cards = [...noticeList(doc).querySelectorAll(".notice-card")];
+    assert(cards.length === feed.notices.length, `cards ${cards.length} vs feed ${feed.notices.length}`);
+    assert(recordIds(noticeList(doc)).join() === feed.notices.map((row) => row.id).join(), "the page is not the feed, in order");
+    assert(cards[0].querySelector("h3").textContent.includes("onerror"), "the newest published notice is not on top");
+    assert(!cards.some((card) => card.textContent.includes("মডেল টেস্ট পরীক্ষা শুরু হবে")), "the authored placeholder was left beside the real notices");
+    assert(doc.querySelector("#official-notices h2").textContent === "অফিশিয়াল নোটিশ", "the section's own heading moved");
+  });
+  await check("publishing a third notice removes nothing and adds one card", async () => {
+    const before = (await call("/api/public/notices")).json.notices.map((row) => row.id);
+    const created = await call("/api/cms/notices", { method: "POST", body: { title: "ছুটির নোটিশ", body: "সকল শ্রেণি বন্ধ থাকবে।", published_at: "2026-10-25", status: "published" } }, jar);
+    assert(created.status === 201, JSON.stringify(created.json));
+    const doc = (await render("notices.html")).window.document;
+    const after = recordIds(noticeList(doc));
+    assert(after.length === before.length + 1, `cards went from ${before.length} to ${after.length}`);
+    for (const id of before) assert(after.includes(id), `an older published notice (${id}) disappeared`);
+    assert(after.includes(created.json.item.id), "the new notice is not on the page");
+    assert(new Set(after).size === after.length, "a notice card was duplicated");
+  });
+  await check("an appended notice keeps its attachment link", async () => {
+    const pdf = Buffer.concat([Buffer.from("%PDF-1.4\n"), Buffer.from("1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n"), Buffer.from("%".repeat(120))]);
+    const form = new FormData();
+    form.set("file", new Blob([pdf], { type: "application/pdf" }), "ছুটির-নোটিশ.pdf");
+    const upload = await call("/api/cms/upload", { method: "POST", body: form }, jar);
+    assert(upload.status === 201, JSON.stringify(upload.json));
+    const created = await call("/api/cms/notices", { method: "POST", body: { title: "নথিসহ নোটিশ", body: "সংযুক্ত নথি দেখুন।", published_at: "2026-10-26", status: "published", file: upload.json.file } }, jar);
+    assert(created.status === 201, JSON.stringify(created.json));
+    const doc = (await render("notices.html")).window.document;
+    const card = [...noticeList(doc).querySelectorAll(".notice-card")].find((node) => node.dataset.cmsRecord === created.json.item.id);
+    assert(card, "the newest notice is not on the page");
+    const link = card.querySelector("a.text-link");
+    assert(link && link.getAttribute("href").startsWith("/api/media?path="), `attachment link wrong: ${link?.getAttribute("href")}`);
+    assert(link.hasAttribute("download") && link.rel === "noopener", "the download affordance changed");
+    const media = await fetch(`${BASE}${link.getAttribute("href")}`);
+    assert(media.status === 200 && media.headers.get("content-type") === "application/pdf", `attachment serves ${media.status}`);
+  });
+  await check("no control appears while the feed has nothing behind the first page", async () => {
+    const doc = (await render("notices.html")).window.document;
+    const feed = (await call("/api/public/notices")).json;
+    assert(feed.has_more === false && feed.next_offset === null, `feed says has_more ${feed.has_more}`);
+    assert(doc.querySelectorAll("[data-cms-more]").length === 0, "a load-more control was built for nothing to load");
+  });
+
+  /* -------------------------------------------------- reaching older records */
+
+  await check("the control appears when the feed says older rows exist", async () => {
+    const dom = await renderWithFeed("notices.html", {
+      notices: {
+        first: { ok: true, notices: [feedNotice("n1"), feedNotice("n2")], limit: 2, offset: 0, has_more: true, next_offset: 2 },
+      },
+    });
+    const list = noticeList(dom.window.document);
+    const control = list.querySelector("[data-cms-more]");
+    assert(control, "no আরও পুরোনো control was built");
+    assert(control.textContent === "আরও পুরোনো নোটিশ দেখুন", control.textContent);
+    assert(control.tagName === "BUTTON" && control.getAttribute("type") === "button", "the control is not a plain button");
+    assert([...control.classList].join(" ") === "btn btn-outline", `control classes: ${control.className}`);
+    await checkClassesAgainstStylesheet(["btn", "btn-outline"]);
+    assert(recordIds(list).join() === "n1,n2", recordIds(list).join());
+    assert(dom.pageErrors.length === 0, dom.pageErrors.join(" | "));
+  });
+  await check("clicking it adds the older page below the cards already shown", async () => {
+    const dom = await renderWithFeed("notices.html", {
+      notices: {
+        first: { ok: true, notices: [feedNotice("n1"), feedNotice("n2")], limit: 2, offset: 0, has_more: true, next_offset: 2 },
+        // The second page deliberately repeats n2: a row that moved between two requests
+        // must be skipped, not shown twice.
+        next: (offset) => ({ ok: true, notices: [feedNotice("n2"), feedNotice("n3")], limit: 2, offset, has_more: false, next_offset: null }),
+      },
+    });
+    const list = noticeList(dom.window.document);
+    list.querySelector("[data-cms-more]").click();
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    assert(recordIds(list).join() === "n1,n2,n3", recordIds(list).join());
+    assert(list.querySelectorAll(".notice-card").length === 3, "a card was replaced instead of added to");
+    assert(list.querySelector("[data-cms-more]") === null, "the control stayed after the last page");
+    assert(list.getAttribute("aria-busy") === null, "the list is still marked busy");
+    assert(dom.pageErrors.length === 0, dom.pageErrors.join(" | "));
+  });
+  await check("a second click while a page is loading cannot skip ahead", async () => {
+    let requests = 0;
+    const dom = await renderWithFeed("notices.html", {
+      notices: {
+        first: { ok: true, notices: [feedNotice("n1"), feedNotice("n2")], limit: 2, offset: 0, has_more: true, next_offset: 2 },
+        next: async (offset) => {
+          requests += 1;
+          await new Promise((resolve) => setTimeout(resolve, 140));
+          return { ok: true, notices: [feedNotice(`n${offset + 1}`), feedNotice(`n${offset + 2}`)], limit: 2, offset, has_more: false, next_offset: null };
+        },
+      },
+    });
+    const list = noticeList(dom.window.document);
+    const control = list.querySelector("[data-cms-more]");
+    control.click();
+    control.click();
+    control.click();
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    assert(requests === 1, `${requests} pages were asked for in reply to three clicks`);
+    assert(recordIds(list).join() === "n1,n2,n3,n4", recordIds(list).join());
+    assert(list.querySelector("[data-cms-more]") === null, "the control survived the last page");
+    assert(dom.pageErrors.length === 0, dom.pageErrors.join(" | "));
+  });
+  await check("running the script again cannot leave a duplicate card behind", async () => {
+    const dom = await renderWithFeed("notices.html", {
+      notices: {
+        first: { ok: true, notices: [feedNotice("n1"), feedNotice("n2")], limit: 2, offset: 0, has_more: true, next_offset: 2 },
+        next: (offset) => ({ ok: true, notices: [feedNotice("n3")], limit: 2, offset, has_more: false, next_offset: null }),
+      },
+    });
+    const list = noticeList(dom.window.document);
+    list.querySelector("[data-cms-more]").click();
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    assert(recordIds(list).join() === "n1,n2,n3", recordIds(list).join());
+    dom.window.eval(await fs.readFile(path.join(ROOT, "assets/js/site-content.js"), "utf8"));
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    const ids = recordIds(list);
+    assert(ids.join() === "n1,n2", `a re-render produced ${ids.join(",")}`);
+    assert(new Set(ids).size === ids.length, "a card was duplicated");
+    assert(list.querySelectorAll(".notice-card").length === 2, "a re-render left a stale older page on the list");
+    assert(list.querySelector("[data-cms-more]"), "the control vanished, so the older page became unreachable");
+  });
+  await check("an earlier exam-routine page is added above, in date order", async () => {
+    const dom = await renderWithFeed("notices.html", {
+      exams: {
+        first: { ok: true, exams: [feedExam("e3", "2026-11-20"), feedExam("e4", "2026-11-25")], limit: 2, offset: 0, has_more: true, next_offset: 2 },
+        next: (offset) => ({ ok: true, exams: [feedExam("e1", "2026-11-10"), feedExam("e2", "2026-11-15")], limit: 2, offset, has_more: false, next_offset: null }),
+      },
+    });
+    const section = dom.window.document.getElementById("exam-routines");
+    const list = section.querySelector('[data-cms="exam-routines"]');
+    assert(section.hidden === false, "the exam section stayed hidden with rows to show");
+    assert(recordIds(list).join() === "e3,e4", recordIds(list).join());
+    const control = list.querySelector("[data-cms-more]");
+    assert(control && control.textContent === "আগের রুটিন দেখুন", control?.textContent);
+    assert(list.firstElementChild === control, "the earlier-rows control belongs above the cards");
+    control.click();
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    assert(recordIds(list).join() === "e1,e2,e3,e4", recordIds(list).join());
+    assert(dom.pageErrors.length === 0, dom.pageErrors.join(" | "));
+  });
+  await check("older routines are appended below, newest first throughout", async () => {
+    const dom = await renderWithFeed("notices.html", {
+      routines: {
+        first: { ok: true, routines: [feedRoutine("r1", "2026-12-05"), feedRoutine("r2", "2026-12-01")], limit: 2, offset: 0, has_more: true, next_offset: 2 },
+        next: (offset) => ({ ok: true, routines: [feedRoutine("r3", "2026-11-20"), feedRoutine("r4", null)], limit: 2, offset, has_more: false, next_offset: null }),
+      },
+    });
+    const list = dom.window.document.querySelector('[data-cms="routines"]');
+    assert(list.querySelector("[data-cms-more]").textContent === "আরও পুরোনো রুটিন দেখুন", "wrong label for the routines list");
+    list.querySelector("[data-cms-more]").click();
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    assert(recordIds(list).join() === "r1,r2,r3,r4", recordIds(list).join());
+    const last = list.lastElementChild;
+    assert(last.dataset.cmsRecord === "r4" && !last.textContent.includes("১ ডিসেম্বর"), "an undated routine must still sort last, without a date line");
+    assert(dom.pageErrors.length === 0, dom.pageErrors.join(" | "));
+  });
+  await check("a feed that answers nothing leaves the page exactly as authored", async () => {
+    const dom = await renderWithFeed("notices.html", {
+      notices: { first: { ok: true, notices: [], limit: 20, offset: 0, has_more: false, next_offset: null } },
+      exams: { first: { ok: true, exams: [], limit: 200, offset: 0, has_more: false, next_offset: null } },
+      routines: { first: { ok: true, routines: [], limit: 40, offset: 0, has_more: false, next_offset: null } },
+    });
+    const doc = dom.window.document;
+    assert(doc.querySelectorAll("[data-cms-record], [data-cms-more]").length === 0, "a card or control was built from an empty page");
+    assert(noticeList(doc).querySelector(".notice-card h3").textContent.includes("মডেল টেস্ট পরীক্ষা শুরু হবে"), "the authored zero-state notice was removed");
+    assert(doc.getElementById("exam-routines").hidden && doc.getElementById("school-routines").hidden, "an empty routine feed left its section open");
+    assert(dom.pageErrors.length === 0, dom.pageErrors.join(" | "));
+  });
+  await check("the paged lists and the gallery never mix their markers", async () => {
+    const dom = await renderWithFeed("notices.html", { notices: { first: { ok: true, notices: [feedNotice("n1")], limit: 1, offset: 0, has_more: false, next_offset: null } } });
+    assert(dom.window.document.querySelectorAll("[data-cms-photo]").length === 0, "a gallery tile leaked onto the notices page");
+    const galleryPage = (await render("gallery.html")).window.document;
+    assert(galleryPage.querySelectorAll("[data-cms-record], [data-cms-more]").length === 0, "a list card leaked into the gallery");
   });
 
   console.log("\n— homepage —");

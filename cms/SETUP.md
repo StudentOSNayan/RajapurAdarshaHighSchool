@@ -96,6 +96,15 @@ dashboard, the page switches to the database list. So the very first thing to do
 setup is: **নোটিশ → + নতুন নোটিশ** → type the current notice → **প্রকাশ করুন**.
 Until that happens, no school information is lost; the static content simply stays.
 
+Nothing published is ever replaced by a later publication. The notices page, the exam
+routine section and the routine section are shown a page at a time — 20 notices, 200 exam
+rows, 40 routines — and when older records exist behind that page the page grows its own
+**আরও পুরোনো নোটিশ দেখুন** / **আগের রুটিন দেখুন** button, which adds the older rows below
+(or, for exams, above, since that list reads oldest-date-first). Each card the CMS adds is
+marked with its row id, so the same record can never appear twice and no card already on
+screen is thrown away when another page loads. The feeds behind them answer
+`/api/public/<feed>?limit=…&offset=…` and report `has_more` / `next_offset`.
+
 ---
 
 ## Local development (no Supabase account needed)
@@ -148,9 +157,11 @@ security rule or the public design's markup regresses.
 | `অপ্রকাশিত` (unpublished) | was live, taken down | no |
 | বাতিল ঘর (trash) | deleted, restorable | no |
 
-Deleting never destroys anything immediately: rows go to the trash (restore or purge
-there), photo files are removed from storage only when a row is purged or an album is
-deleted for good. Every create / publish / delete is written to `cms_audit` with the
+Deleting never destroys anything immediately, and neither does editing: rows go to the
+trash (restore or purge there), and clearing or swapping an attachment leaves the previous
+file in storage rather than removing it, because an edit is not a delete. Stored objects are
+only ever freed by an explicit purge, and even then only the ones no other row still
+points at. Every create / publish / delete is written to `cms_audit` with the
 account's email.
 
 ## What is *not* in the database

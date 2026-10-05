@@ -17,6 +17,8 @@ export const RESOURCES = {
     table: "notices",
     entity: "notice",
     label: "নোটিশ",
+    publicPage: 20,
+    publicMax: 100,
     adminOrder: [{ col: "published_at", dir: "desc", nullsLast: true }, { col: "updated_at", dir: "desc" }],
     publicOrder: [{ col: "published_at", dir: "desc" }, { col: "created_at", dir: "desc" }],
     search: ["title", "body", "audience"],
@@ -26,6 +28,11 @@ export const RESOURCES = {
     table: "exam_routines",
     entity: "exam",
     label: "পরীক্ষার রুটিন",
+    publicPage: 200,
+    publicMax: 200,
+    // Displayed oldest-date-first, so the window is anchored at the newest row: a
+    // 201st published exam would otherwise be cut off the bottom of the table.
+    publicTail: true,
     adminOrder: [{ col: "exam_date", dir: "desc" }, { col: "sort_order", dir: "asc" }],
     publicOrder: [{ col: "exam_date", dir: "asc" }, { col: "sort_order", dir: "asc" }, { col: "start_time", dir: "asc", nullsFirst: false }],
     search: ["exam_name", "class_name", "subject", "room"],
@@ -35,6 +42,8 @@ export const RESOURCES = {
     table: "routines",
     entity: "routine",
     label: "রুটিন",
+    publicPage: 40,
+    publicMax: 100,
     adminOrder: [{ col: "updated_at", dir: "desc" }],
     publicOrder: [{ col: "event_date", dir: "desc", nullsFirst: false }, { col: "created_at", dir: "desc" }],
     search: ["title", "routine_type", "class_name", "description"],
@@ -170,10 +179,11 @@ export async function update(name, id, payload, actor) {
   if (clean.status === "published" || (merged.status === "published" && "status" in clean)) {
     await assertPublishable(spec, merged, store);
   }
-  if ("file_path" in clean) {
-    if (clean.file_path) await assertMediaExists(clean.file_path);
-    else if (existing.file_path) await deleteMedia(existing.file_path);
-  }
+  // An edit only edits the row. Clearing or swapping an attachment leaves the previous
+  // object in storage, because an edit is not a delete: a card already cached by a
+  // visitor, or another row that happens to share the key, would otherwise lose its file
+  // mid-air with nothing in the trash to put it back. Purge is the way to free bytes.
+  if (clean.file_path) await assertMediaExists(clean.file_path);
   if ("cover_photo_id" in clean) await assertCoverBelongsToAlbum(spec, id, clean.cover_photo_id, store);
   const updated = await store.update(spec.table, id, { ...clean, updated_by: actor.user.id });
   await audit(store, actor, "update", spec.table, id, null);
@@ -216,6 +226,34 @@ const assertPublishable = async (spec, row, store, id = null) => {
   }
 };
 
+/* Objects live in one bucket and many kinds of row can name one, so a purge asks first
+ * whether anything still points at the bytes before removing them. The tables are scanned
+ * without a status or deleted_at filter on purpose: a draft, or a row sitting in the trash
+ * waiting to be restored, is still a reason to keep a file.
+ */
+const MEDIA_HOLDERS = ["notices", "exam_routines", "routines", "photos"];
+
+const stillReferenced = async (store, key) => {
+  for (const table of MEDIA_HOLDERS) {
+    const rows = await store
+      .rawList(table, { where: [{ col: "file_path", op: "eq", value: key }], select: ["id"], limit: 1 })
+      .catch(() => []);
+    if (rows.length) return true;
+  }
+  return false;
+};
+
+/** Frees the objects nothing points at any more, and says how many went. */
+const releaseMedia = async (store, paths) => {
+  let removed = 0;
+  for (const pathValue of paths.filter(Boolean)) {
+    if (await stillReferenced(store, pathValue)) continue;
+    await deleteMedia(pathValue);
+    removed += 1;
+  }
+  return removed;
+};
+
 /* --------------------------------------------------------- trash and purge */
 
 export async function trash(name, id, actor) {
@@ -237,8 +275,10 @@ export async function restore(name, id, actor) {
 }
 
 /**
- * Permanent delete. Requires an explicit confirmation word from the admin app and
- * removes the stored files too. Photos in a trashed album are purged with it.
+ * Permanent delete. Requires an explicit confirmation word from the admin app and is the
+ * only place that frees stored bytes — this is the step the school chose when it typed
+ * DELETE, so the files go with the row, except where another row still names the same
+ * object. Photos in a trashed album are purged with it.
  */
 export async function purge(name, id, actor, { confirm } = {}) {
   const spec = resourceOf(name);
@@ -257,9 +297,10 @@ export async function purge(name, id, actor, { confirm } = {}) {
     for (const photo of photos) await store.driver.remove("photos", photo.id).catch(() => null);
   }
   await store.purge(spec.table, id);
-  for (const pathValue of paths) await deleteMedia(pathValue);
-  await audit(store, actor, "purge", spec.table, id, `${paths.length ? paths.length + " টি ফাইলসহ" : ""}`);
-  return { ok: true, purged: true, filesRemoved: paths.length };
+  const removed = await releaseMedia(store, paths);
+  await audit(store, actor, "purge", spec.table, id, `${removed ? removed + " টি ফাইলসহ" : ""}`);
+  // filesRemoved is what actually went; filesKept is a row elsewhere still naming the object.
+  return { ok: true, purged: true, filesRemoved: removed, filesKept: paths.length - removed };
 }
 
 /* ------------------------------------------------------------------- photos */
@@ -335,8 +376,8 @@ export async function purgePhoto(id, actor, { confirm } = {}) {
   if (confirm !== "DELETE") throw badRequest("ছবিটি স্থায়ীভাবে মুছতে নিশ্চিতকরণ প্রয়োজন।");
   const store = await getStore();
   const photo = await store.byId("photos", id, { includeDeleted: true });
-  await deleteMedia(photo.file_path);
   await store.purge("photos", id);
+  await releaseMedia(store, [photo.file_path]);
   await audit(store, actor, "photo_purge", "photos", id, null);
   return { ok: true, purged: true, album_id: photo.album_id };
 }
@@ -356,69 +397,96 @@ const publishedOnly = [{ col: "status", op: "eq", value: "published" }, NOT_DELE
 
 const publicFile = (row) => (row.file_path ? fileMeta(row) : null);
 
-export async function publicNotices(limit = 20) {
+/** The exact opposite of a sort rule, so a tail window reads back in the page's order. */
+const reverseOrder = (order) =>
+  order.map(({ col, dir, nullsFirst }) => ({ col, dir: dir === "asc" ? "desc" : "asc", nullsFirst: !nullsFirst }));
+
+/**
+ * One page of published rows, and everything a visitor needs to ask for the next one.
+ *
+ * A public list is a page, not the whole table, so the read layer has to say honestly
+ * whether more rows exist. It does that by asking for one row more than it shows: the
+ * extra row is the answer, and no counting query (capped at 1000 by both drivers) is
+ * trusted with it. `offset` counts rows already shown, clamped to whole numbers, and a
+ * tail-anchored feed walks backwards in time while still returning rows in its own
+ * display order — which is what keeps the newest exam routine on screen even when the
+ * school has published hundreds of them.
+ */
+const publicPage = async (name, { limit, offset } = {}) => {
+  const spec = RESOURCES[name];
+  const size = Math.min(Math.max(Number.parseInt(limit, 10) || spec.publicPage, 1), spec.publicMax);
+  const from = Math.max(Number.parseInt(offset, 10) || 0, 0);
   const store = await getStore();
-  const rows = await store.rawList("notices", {
+  const rows = await store.rawList(spec.table, {
     where: publishedOnly,
-    order: RESOURCES.notices.publicOrder,
-    limit: Math.min(Math.max(Number(limit) || 20, 1), 100),
-    select: PUBLIC_SELECT.notices,
+    order: spec.publicTail ? reverseOrder(spec.publicOrder) : spec.publicOrder,
+    limit: size + 1,
+    offset: from,
+    select: PUBLIC_SELECT[spec.table],
   });
-  return rows.map((row) => ({
-    id: row.id,
-    title: row.title,
-    body: row.body,
-    audience: row.audience || null,
-    type: row.notice_type,
-    importance: row.importance,
-    date: row.published_at,
-    date_label: toBengaliDate(row.published_at),
-    file: publicFile(row),
-  }));
+  const hasMore = rows.length > size;
+  const page = rows.slice(0, size);
+  return {
+    rows: spec.publicTail ? page.reverse() : page,
+    info: { limit: size, offset: from, has_more: hasMore, next_offset: hasMore ? from + size : null },
+  };
+};
+
+export async function publicNotices(query = {}) {
+  const { rows, info } = await publicPage("notices", query);
+  return {
+    notices: rows.map((row) => ({
+      id: row.id,
+      title: row.title,
+      body: row.body,
+      audience: row.audience || null,
+      type: row.notice_type,
+      importance: row.importance,
+      date: row.published_at,
+      date_label: toBengaliDate(row.published_at),
+      file: publicFile(row),
+    })),
+    ...info,
+  };
 }
 
-export async function publicExams() {
-  const store = await getStore();
-  const rows = await store.rawList("exam_routines", {
-    where: publishedOnly,
-    order: RESOURCES.exams.publicOrder,
-    limit: 200,
-    select: PUBLIC_SELECT.exam_routines,
-  });
-  return rows.map((row) => ({
-    id: row.id,
-    exam_name: row.exam_name,
-    class_name: row.class_name,
-    subject: row.subject,
-    date: row.exam_date,
-    date_label: toBengaliDate(row.exam_date),
-    time: row.start_time ? String(row.start_time).slice(0, 5) : null,
-    room: row.room || null,
-    notes: row.notes || null,
-    file: publicFile(row),
-  }));
+/** Read newest window first, returned in the page's own ascending order. */
+export async function publicExams(query = {}) {
+  const { rows, info } = await publicPage("exams", query);
+  return {
+    exams: rows.map((row) => ({
+      id: row.id,
+      exam_name: row.exam_name,
+      class_name: row.class_name,
+      subject: row.subject,
+      date: row.exam_date,
+      date_label: toBengaliDate(row.exam_date),
+      time: row.start_time ? String(row.start_time).slice(0, 5) : null,
+      room: row.room || null,
+      notes: row.notes || null,
+      file: publicFile(row),
+    })),
+    ...info,
+  };
 }
 
-export async function publicRoutines(limit = 40) {
-  const store = await getStore();
-  const rows = await store.rawList("routines", {
-    where: publishedOnly,
-    order: RESOURCES.routines.publicOrder,
-    limit: Math.min(Math.max(Number(limit) || 40, 1), 100),
-    select: PUBLIC_SELECT.routines,
-  });
-  return rows.map((row) => ({
-    id: row.id,
-    title: row.title,
-    routine_type: row.routine_type,
-    class_name: row.class_name || null,
-    date: row.event_date,
-    date_label: toBengaliDate(row.event_date),
-    start_time: row.start_time ? String(row.start_time).slice(0, 5) : null,
-    end_time: row.end_time ? String(row.end_time).slice(0, 5) : null,
-    description: row.description || null,
-    file: publicFile(row),
-  }));
+export async function publicRoutines(query = {}) {
+  const { rows, info } = await publicPage("routines", query);
+  return {
+    routines: rows.map((row) => ({
+      id: row.id,
+      title: row.title,
+      routine_type: row.routine_type,
+      class_name: row.class_name || null,
+      date: row.event_date,
+      date_label: toBengaliDate(row.event_date),
+      start_time: row.start_time ? String(row.start_time).slice(0, 5) : null,
+      end_time: row.end_time ? String(row.end_time).slice(0, 5) : null,
+      description: row.description || null,
+      file: publicFile(row),
+    })),
+    ...info,
+  };
 }
 
 export async function publicGallery({ albums = 40, perAlbum = 8 } = {}) {

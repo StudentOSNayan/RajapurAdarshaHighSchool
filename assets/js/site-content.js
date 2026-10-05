@@ -112,32 +112,192 @@
     clock: null,
   };
 
-  const renderNotices = (rows) => {
-    if (!rows || !rows.length) return;
+  const noticeTypeLabel = (type) =>
+    ({ general: "নোটিশ", exam: "পরীক্ষা", result: "ফলাফল", admission: "ভর্তি", event: "অনুষ্ঠান", emergency: "জরুরি" })[type] || "নোটিশ";
+
+  /* One card builder per list, so the first page and an older page are never two
+   * different shapes of markup. They use the page's own card, byte for byte. */
+
+  const noticeCard = (row, index) =>
+    card({
+      title: row.title,
+      tags: [{ label: "অফিশিয়াল নোটিশ", gold: true }, { label: noticeTypeLabel(row.type) }],
+      body: paragraphs(row.body).join(" "),
+      details: metaLine([
+        { icon: ICONS.calendar, text: row.date_label },
+        { icon: ICONS.clock, text: row.audience },
+      ]),
+      primary: row.importance === "urgent" && index === 0,
+      file: row.file,
+    });
+
+  const examCard = (row) =>
+    card({
+      title: row.exam_name,
+      tags: [
+        { label: row.class_name, gold: true },
+        { label: row.subject },
+      ],
+      body: row.notes || null,
+      details: metaLine([
+        { icon: ICONS.calendar, text: row.date_label },
+        { icon: ICONS.clock, text: row.time },
+        { icon: ICONS.clock, text: row.room },
+      ]),
+      file: row.file,
+    });
+
+  const routineCard = (row) => {
+    const time = [row.start_time, row.end_time].filter(Boolean).join(" – ");
+    return card({
+      title: row.title,
+      tags: [{ label: row.routine_type, gold: true }, row.class_name ? { label: row.class_name } : null].filter(Boolean),
+      body: row.description,
+      details: metaLine([
+        { icon: ICONS.calendar, text: row.date_label },
+        { icon: ICONS.clock, text: time },
+      ]),
+      file: row.file,
+    });
+  };
+
+  /* --------------------------------------------------------- paged list feeds */
+
+  /**
+   * Notices, exam routines and other routines all grow over time, and their feed answers
+   * a page at a time. These are the rules that make that safe for a school:
+   *
+   *   - the first page takes over its container the way it always did. The notice written
+   *     into notices.html is the zero-state stand-in, so it stays on screen untouched while
+   *     the CMS has nothing published;
+   *   - every page after the first is ADDED, never a replacement. Older notices go below
+   *     and earlier exam rows go above, because each list keeps its own ordering rule — the
+   *     newest item is always at the top of what is visible, and nothing already on screen
+   *     is moved, hidden or dropped;
+   *   - a card this script inserts carries data-cms-record="<row id>", and a page whose id
+   *     is already on the page is skipped. So a double click, a retried request, or this
+   *     file being evaluated twice cannot show one notice twice;
+   *   - a failed request leaves the page exactly as it was and keeps the control for a retry.
+   *
+   * Nothing here deletes or hides a published row. A record that is not on this page is one
+   * click away, and the control only exists while there is more to load.
+   */
+  const LIST_FEEDS = {
+    notices: { feed: "notices", rows: "notices", card: noticeCard, older: "আরও পুরোনো নোটিশ দেখুন", place: "after" },
+    "exam-routines": { feed: "exams", rows: "exams", card: examCard, older: "আগের রুটিন দেখুন", place: "before" },
+    routines: { feed: "routines", rows: "routines", card: routineCard, older: "আরও পুরোনো রুটিন দেখুন", place: "after" },
+  };
+
+  const listStates = new Map();
+
+  const listState = (list) => {
+    let state = listStates.get(list);
+    if (!state) {
+      state = { seen: new Set(), limit: 0, offset: null, hasMore: false, loading: false, control: null };
+      listStates.set(list, state);
+    }
+    return state;
+  };
+
+  /** Forgets a list completely — what happens when its feed turns out to be empty. */
+  const resetList = (list) => {
+    const state = listState(list);
+    if (state.control) {
+      state.control.remove();
+      state.control = null;
+    }
+    state.seen.clear();
+    state.limit = 0;
+    state.offset = null;
+    state.hasMore = false;
+    state.loading = false;
+    list.replaceChildren();
+  };
+
+  const paintPage = (list, feed, payload, { replace }) => {
+    const spec = LIST_FEEDS[feed];
+    const state = listState(list);
+    const rows = payload[spec.rows] || [];
+    if (replace) {
+      list.replaceChildren();
+      state.seen.clear();
+    }
+    const fragment = document.createDocumentFragment();
+    for (const row of rows) {
+      const id = String(row.id ?? "");
+      if (!id || state.seen.has(id)) continue; // one card per published row, always
+      state.seen.add(id);
+      const node = spec.card(row, state.seen.size - 1);
+      node.dataset.cmsRecord = id;
+      fragment.append(node);
+    }
+    if (spec.place === "before" && state.control) list.insertBefore(fragment, state.control);
+    else if (spec.place === "before") list.prepend(fragment);
+    else list.append(fragment);
+    state.limit = Number(payload.limit) || rows.length;
+    state.offset = payload.next_offset ?? null;
+    state.hasMore = payload.has_more === true && state.offset !== null;
+  };
+
+  /**
+   * The control is a plain button in the site's own button style, placed inside the list so
+   * the grid gap that already separates cards spaces it too — no new CSS, no new markup in
+   * the HTML, and on a phone it is a full-width row rather than a floating chip.
+   */
+  const drawOlder = (list, feed) => {
+    const spec = LIST_FEEDS[feed];
+    const state = listState(list);
+    if (!state.hasMore) {
+      if (state.control) {
+        state.control.remove();
+        state.control = null;
+      }
+      return;
+    }
+    if (!state.control) {
+      // The list's own size scale, and .btn's 45px box, so the control is a real tap
+      // target on a phone rather than a 39px chip.
+      const button = el("button", "btn btn-outline", spec.older);
+      button.type = "button";
+      button.dataset.cmsMore = feed;
+      button.addEventListener("click", () => loadOlder(list, feed));
+      state.control = button;
+    }
+    state.control.disabled = false;
+    state.control.textContent = spec.older;
+    if (spec.place === "before") list.prepend(state.control);
+    else list.append(state.control);
+  };
+
+  const loadOlder = async (list, feed) => {
+    const spec = LIST_FEEDS[feed];
+    const state = listState(list);
+    if (state.loading || !state.hasMore || state.offset === null) return;
+    state.loading = true;
+    if (state.control) {
+      state.control.disabled = true;
+      state.control.textContent = "লোড হচ্ছে…";
+    }
+    list.setAttribute("aria-busy", "true");
+    const payload = await fetchJson(`${spec.feed}?limit=${state.limit}&offset=${state.offset}`);
+    list.removeAttribute("aria-busy");
+    state.loading = false;
+    if (payload) paintPage(list, feed, payload, { replace: false });
+    drawOlder(list, feed);
+  };
+
+  const renderNotices = (payload) => {
+    const rows = payload.notices || [];
+    if (!rows.length) return;
     ICONS.calendar = iconFrom(".notice-details span svg");
     ICONS.clock = iconFrom(".notice-details span + span svg") || ICONS.calendar;
 
     for (const list of containers.get("notices") || []) {
-      const fragment = document.createDocumentFragment();
-      rows.forEach((row, index) => {
-        fragment.append(
-          card({
-            title: row.title,
-            tags: [{ label: "অফিশিয়াল নোটিশ", gold: true }, { label: noticeTypeLabel(row.type) }],
-            body: paragraphs(row.body).join(" "),
-            details: metaLine([
-              { icon: ICONS.calendar, text: row.date_label },
-              { icon: ICONS.clock, text: row.audience },
-            ]),
-            primary: row.importance === "urgent" && index === 0,
-            file: row.file,
-          }),
-        );
-      });
-      list.replaceChildren(fragment);
+      paintPage(list, "notices", payload, { replace: true });
+      drawOlder(list, "notices");
     }
 
-    // The homepage strip mirrors the newest published notice.
+    // The homepage strip mirrors the newest published notice, and only that one.
     const strip = (containers.get("home-notice") || [])[0];
     if (strip) {
       const latest = rows[0];
@@ -153,70 +313,36 @@
     }
   };
 
-  const noticeTypeLabel = (type) =>
-    ({ general: "নোটিশ", exam: "পরীক্ষা", result: "ফলাফল", admission: "ভর্তি", event: "অনুষ্ঠান", emergency: "জরুরি" })[type] || "নোটিশ";
-
   /* --------------------------------------------------------------- routines */
 
-  const renderExamRoutines = (rows) => {
+  const renderExamRoutines = (payload) => {
     const section = document.getElementById("exam-routines");
     if (!section) return;
     const list = (containers.get("exam-routines") || [])[0];
     if (!list) return;
-    if (!rows || !rows.length) {
+    if (!payload.exams || !payload.exams.length) {
+      resetList(list);
       section.hidden = true;
       return;
     }
     section.hidden = false;
-    const fragment = document.createDocumentFragment();
-    for (const row of rows) {
-      fragment.append(
-        card({
-          title: row.exam_name,
-          tags: [
-            { label: row.class_name, gold: true },
-            { label: row.subject },
-          ],
-          body: row.notes || null,
-          details: metaLine([
-            { icon: ICONS.calendar, text: row.date_label },
-            { icon: ICONS.clock, text: row.time },
-            { icon: ICONS.clock, text: row.room },
-          ]),
-          file: row.file,
-        }),
-      );
-    }
-    list.replaceChildren(fragment);
+    paintPage(list, "exam-routines", payload, { replace: true });
+    drawOlder(list, "exam-routines");
   };
 
-  const renderRoutines = (rows) => {
+  const renderRoutines = (payload) => {
     const section = document.getElementById("school-routines");
     if (!section) return;
     const list = (containers.get("routines") || [])[0];
     if (!list) return;
-    if (!rows || !rows.length) {
+    if (!payload.routines || !payload.routines.length) {
+      resetList(list);
       section.hidden = true;
       return;
     }
     section.hidden = false;
-    const fragment = document.createDocumentFragment();
-    for (const row of rows) {
-      const time = [row.start_time, row.end_time].filter(Boolean).join(" – ");
-      fragment.append(
-        card({
-          title: row.title,
-          tags: [{ label: row.routine_type, gold: true }, row.class_name ? { label: row.class_name } : null].filter(Boolean),
-          body: row.description,
-          details: metaLine([
-            { icon: ICONS.calendar, text: row.date_label },
-            { icon: ICONS.clock, text: time },
-          ]),
-          file: row.file,
-        }),
-      );
-    }
-    list.replaceChildren(fragment);
+    paintPage(list, "routines", payload, { replace: true });
+    drawOlder(list, "routines");
   };
 
   /* ---------------------------------------------------------------- gallery */
@@ -339,21 +465,21 @@
     if (wanted.notices) {
       jobs.push(
         fetchJson("notices").then((payload) => {
-          if (payload) renderNotices(payload.notices);
+          if (payload) renderNotices(payload);
         }),
       );
     }
     if (wanted.exams) {
       jobs.push(
         fetchJson("exams").then((payload) => {
-          if (payload) renderExamRoutines(payload.exams);
+          if (payload) renderExamRoutines(payload);
         }),
       );
     }
     if (wanted.routines) {
       jobs.push(
         fetchJson("routines").then((payload) => {
-          if (payload) renderRoutines(payload.routines);
+          if (payload) renderRoutines(payload);
         }),
       );
     }

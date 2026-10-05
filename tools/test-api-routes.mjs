@@ -102,6 +102,21 @@ await check("the public renderer only calls /api/<group>/<one segment>", () => {
   assert(deep.length === 0, `too deep: ${deep.join(", ")}`);
   assert(urls.length >= 2, "no API calls found in site-content.js");
 });
+await check("paging rides on the query string, so it needs no new route at all", () => {
+  const urls = collected["assets/js/site-content.js"];
+  const read = new Set(["limit", "offset", "albums", "per_album"]);
+  for (const url of urls) {
+    const [pathname, search] = String(url).split("?");
+    assert(pathname.split("/").filter(Boolean).length === 3, `${url} is deeper than /api/<group>/<feed> — Vercel would not answer it`);
+    for (const pair of (search ?? "").split("&").filter(Boolean)) {
+      const [name, value] = pair.split("=");
+      assert(read.has(name), `${url} asks for “${name}”, which the public router does not read`);
+      // The collector replaces ${…} with "sample", so a value is only missing when the
+      // client really left it out.
+      assert(value && value.length > 0, `${url} sends an empty ${name}`);
+    }
+  }
+});
 await check("mediaUrl() puts the storage key in the query string", async () => {
   const { mediaUrl, thumbTransform } = await import("file://" + path.join(ROOT, "api/_lib/media.mjs"));
   const key = "images/2026-10/2f2a1b6c-0000-4000-8000-abcdefabcdef.webp";

@@ -574,6 +574,223 @@ try {
     assert(/noindex/i.test(body), "admin page is indexable");
   });
 
+  console.log("\n— published lists stay reachable —");
+  const feedPage = async (feed, params) => (await call(`/api/public/${feed}${params ? `?${params}` : ""}`)).json;
+  const walkPages = async (feed, key, size = 2) => {
+    const ids = [];
+    for (let offset = 0, guard = 0; guard < 30; guard += 1) {
+      const page = await feedPage(feed, `limit=${size}&offset=${offset}`);
+      ids.push(...page[key].map((row) => row.id));
+      if (!page.has_more) return ids;
+      offset = page.next_offset;
+    }
+    throw new Error(`the ${feed} feed never stopped paging`);
+  };
+  const pagedNoticeIds = [];
+  await check("three more notices are published, to make a list longer than a page", async () => {
+    for (const day of ["01", "02", "03"]) {
+      const { status, json } = await call("/api/cms/notices", {
+        method: "POST",
+        body: { title: `পেজিং নোটিশ ${day}`, body: "পুরোনো নোটিশ এখনো পাওয়া যাচ্ছে কি না তা দেখার পরীক্ষা।", published_at: `2026-12-${day}`, status: "published" },
+      });
+      assert(status === 201, `${status} ${JSON.stringify(json)}`);
+      pagedNoticeIds.push(json.item.id);
+    }
+  });
+  await check("a page says whether older rows exist and where the next one starts", async () => {
+    const page = await feedPage("notices", "limit=2");
+    assert(page.notices.length === 2, `rows on the page: ${page.notices.length}`);
+    assert(page.limit === 2 && page.offset === 0, `limit ${page.limit}, offset ${page.offset}`);
+    assert(page.has_more === true, "a feed with more rows than this page reported has_more false");
+    assert(page.next_offset === 2, `next_offset ${page.next_offset}`);
+    const last = await feedPage("notices", "limit=2&offset=4");
+    assert(last.notices.length === 1 && last.has_more === false && last.next_offset === null, JSON.stringify(last).slice(0, 180));
+  });
+  await check("walking every page finds each notice once, and none are skipped", async () => {
+    const walked = await walkPages("notices", "notices");
+    const whole = await feedPage("notices", "limit=100");
+    assert(walked.length === new Set(walked).size, "a notice came back on two pages");
+    assert(walked.join() === whole.notices.map((row) => row.id).join(), `paging found ${walked.length} rows, the whole page had ${whole.notices.length}`);
+    for (const id of pagedNoticeIds) assert(walked.includes(id), `a published notice (${id}) is reachable on no page`);
+  });
+  await check("publishing one more notice leaves all the older ones reachable", async () => {
+    const before = (await feedPage("notices", "limit=100")).notices.map((row) => row.id);
+    const { status, json } = await call("/api/cms/notices", {
+      method: "POST",
+      body: { title: "পেজিং নোটিশ ০৪", body: "সবার নতুন নোটিশ প্রকাশের পর পুরোনোগুলোর কী হলো দেখা যাচ্ছে।", published_at: "2026-12-04", status: "published" },
+    });
+    assert(status === 201, `${status} ${JSON.stringify(json)}`);
+    pagedNoticeIds.push(json.item.id);
+    const firstPage = await feedPage("notices", "limit=2");
+    assert(firstPage.notices[0].id === json.item.id, "the newest notice is not at the top of the first page");
+    const walked = await walkPages("notices", "notices");
+    for (const id of before) assert(walked.includes(id), `publishing hid ${id}`);
+    assert(walked.length === before.length + 1, `the list grew by ${walked.length - before.length}`);
+  });
+  await check("page size and offset are clamped, never trusted", async () => {
+    const wild = await feedPage("notices", "limit=99999&offset=-5");
+    assert(wild.limit === 100 && wild.offset === 0, `limit ${wild.limit}, offset ${wild.offset}`);
+    const junk = await feedPage("notices", "limit=abc&offset=zz");
+    assert(junk.limit === 20 && junk.offset === 0, `limit ${junk.limit}, offset ${junk.offset}`);
+    const zero = await feedPage("notices", "limit=0");
+    assert(zero.limit === 20, `limit 0 became ${zero.limit}`);
+    const beyond = await feedPage("notices", "limit=2&offset=9999");
+    assert(beyond.notices.length === 0 && beyond.has_more === false && beyond.next_offset === null, JSON.stringify(beyond).slice(0, 180));
+    const exams = await feedPage("exams", "limit=5000");
+    assert(exams.limit === 200, `exams limit ${exams.limit}`);
+  });
+  await check("each feed still answers the page size the site asked for before paging", async () => {
+    const notices = await feedPage("notices");
+    const routines = await feedPage("routines");
+    const exams = await feedPage("exams");
+    assert(notices.limit === 20 && notices.offset === 0, `notices ${notices.limit}/${notices.offset}`);
+    assert(routines.limit === 40, `routines ${routines.limit}`);
+    assert(exams.limit === 200, `exams ${exams.limit}`);
+    const days = notices.notices.map((row) => Date.parse(row.date));
+    assert(days.every((value, i) => i === 0 || days[i - 1] >= value), "notices are no longer newest first");
+  });
+  await check("an exam window starts at the newest date and reads back in date order", async () => {
+    for (const date of ["2027-02-01", "2027-02-05"]) {
+      const { status } = await call("/api/cms/exams", {
+        method: "POST",
+        body: { exam_name: `পরীক্ষা ${date}`, class_name: "দশম", subject: "রসায়ন", exam_date: date, published_at: "2026-12-01", status: "published" },
+      });
+      assert(status === 201, `create ${status}`);
+    }
+    const page = await feedPage("exams", "limit=1");
+    assert(page.exams[0].date === "2027-02-05", `the first exam row was ${page.exams[0].date}, not the newest`);
+    assert(page.has_more === true && page.next_offset === 1, `has_more ${page.has_more}`);
+    const older = await feedPage("exams", "limit=1&offset=1");
+    assert(older.exams[0].date === "2027-02-01", `the second page had ${older.exams[0].date}`);
+    const whole = await feedPage("exams", "limit=100");
+    const dates = whole.exams.map((row) => row.date);
+    assert([...dates].sort().join() === dates.join(), `exam rows are not ascending on the page: ${dates.join()}`);
+    const walked = await walkPages("exams", "exams", 2);
+    assert(walked.length === whole.exams.length && new Set(walked).size === walked.length, `paging the exams gave ${walked.length} of ${whole.exams.length}`);
+  });
+  await check("a routine with no date still sorts last, not lost", async () => {
+    const { status } = await call("/api/cms/routines", {
+      method: "POST",
+      body: { title: "তারিখবিহীন রুটিন", routine_type: "সাপ্তাহিক কার্যক্রম", description: "তারিখ নেই, তাই সবার শেষে দেখাবে।", published_at: "2026-12-01", status: "published" },
+    });
+    assert(status === 201, `create ${status}`);
+    const page = await feedPage("routines", "limit=100");
+    const last = page.routines[page.routines.length - 1];
+    assert(!last.date, `the last routine row had a date: ${last.date}`);
+    assert(page.routines.length === new Set(page.routines.map((row) => row.id)).size, "a routine row was repeated");
+  });
+  await check("publishing or unpublishing one row leaves every other row untouched", async () => {
+    const target = pagedNoticeIds[0];
+    const other = pagedNoticeIds[1];
+    const { json: before } = await call(`/api/cms/notices?id=${target}`);
+    const snapshot = JSON.stringify(before.item);
+    const { status: taken } = await call(`/api/cms/notices?id=${other}&action=unpublish`, { method: "POST" });
+    assert(taken === 200, `unpublish ${taken}`);
+    const { json: hidden } = await call("/api/public/notices?limit=100");
+    assert(!hidden.notices.some((row) => row.id === other), "an unpublished row is still on the public feed");
+    const { json: still } = await call("/api/public/notices?limit=100");
+    assert(still.notices.some((row) => row.id === target), "an untouched published row stopped being public");
+    const { status: back } = await call(`/api/cms/notices?id=${other}&action=publish`, { method: "POST" });
+    assert(back === 200, `publish ${back}`);
+    const { json: feed } = await call("/api/public/notices?limit=100");
+    assert(feed.notices.some((row) => row.id === other), "republishing did not bring the row back");
+    const { json: after } = await call(`/api/cms/notices?id=${target}`);
+    assert(JSON.stringify(after.item) === snapshot, "another row changed while this one was published and unpublished");
+  });
+
+  console.log("\n— attachments survive editing —");
+  const uploadPdf = async (label) => {
+    const bytes = Buffer.concat([Buffer.from("%PDF-1.4\n"), Buffer.from(label.padEnd(140, "0")), Buffer.from("%%EOF\n")]);
+    const form = new FormData();
+    form.set("file", new Blob([bytes], { type: "application/pdf" }), `${label}.pdf`);
+    const { status, json } = await call("/api/cms/upload", { method: "POST", body: form });
+    assert(status === 201, `upload ${status}`);
+    return json.file.path;
+  };
+  const mediaStatus = async (key, { anonymous = false } = {}) => {
+    const saved = new Map(jar);
+    if (anonymous) jar.clear();
+    const media = await call(`/api/media?path=${encodeURIComponent(key)}`, { raw: true });
+    if (anonymous) {
+      jar.clear();
+      for (const [name, value] of saved) jar.set(name, value);
+    }
+    return media.status;
+  };
+  let keptKey = "";
+  let sharedKey = "";
+  let replacedKey = "";
+  await check("a notice published with a PDF serves that PDF to a visitor", async () => {
+    keptKey = await uploadPdf("kept");
+    const { status, json } = await call("/api/cms/notices", {
+      method: "POST",
+      body: { title: "নথিসহ নোটিশ", body: "সংযুক্ত নথির নিরাপত্তা পরীক্ষা।", published_at: "2026-12-05", status: "published", file: { path: keptKey, name: "kept.pdf", mime: "application/pdf", bytes: 160 } },
+    });
+    assert(status === 201, `${status} ${JSON.stringify(json)}`);
+    pagedNoticeIds.push(json.item.id);
+    assert((await mediaStatus(keptKey, { anonymous: true })) === 200, "a published attachment is not readable by a visitor");
+  });
+  await check("replacing an attachment keeps the object it replaced", async () => {
+    const id = pagedNoticeIds[pagedNoticeIds.length - 1];
+    replacedKey = await uploadPdf("replaced");
+    const nextKey = replacedKey;
+    const { status } = await call(`/api/cms/notices?id=${id}`, { method: "PATCH", body: { file: { path: nextKey, name: "replaced.pdf", mime: "application/pdf", bytes: 160 } } });
+    assert(status === 200, `patch ${status}`);
+    assert((await mediaStatus(nextKey, { anonymous: true })) === 200, "the new attachment is not public");
+    assert((await mediaStatus(keptKey)) === 200, "an edit destroyed the attachment it replaced");
+    assert((await mediaStatus(keptKey, { anonymous: true })) === 403, "an unreferenced object became world-readable");
+  });
+  await check("clearing an attachment in the edit form keeps the object", async () => {
+    const id = pagedNoticeIds[pagedNoticeIds.length - 1];
+    const { status, json } = await call(`/api/cms/notices?id=${id}`, { method: "PATCH", body: { file: null } });
+    assert(status === 200 && !json.item.file, `${status} ${JSON.stringify(json.item.file)}`);
+    assert((await mediaStatus(keptKey)) === 200, "clearing an attachment deleted the stored file");
+  });
+  await check("publishing and unpublishing never delete a file", async () => {
+    const id = pagedNoticeIds[pagedNoticeIds.length - 1];
+    const { status } = await call(`/api/cms/notices?id=${id}`, { method: "PATCH", body: { file: { path: keptKey, name: "kept.pdf", mime: "application/pdf", bytes: 160 } } });
+    assert(status === 200, `patch ${status}`);
+    for (const action of ["unpublish", "publish"]) {
+      const { status: done } = await call(`/api/cms/notices?id=${id}&action=${action}`, { method: "POST" });
+      assert(done === 200, `${action} ${done}`);
+      assert((await mediaStatus(keptKey)) === 200, `${action} deleted the attachment`);
+    }
+  });
+  await check("purging one row cannot take a file another row still points at", async () => {
+    sharedKey = await uploadPdf("shared");
+    const first = await call("/api/cms/notices", {
+      method: "POST",
+      body: { title: "শেয়ার করা নথি এক", body: "একই নথি দুটি নোটিশে।", published_at: "2026-12-06", status: "published", file: { path: sharedKey, name: "shared.pdf", mime: "application/pdf", bytes: 160 } },
+    });
+    const second = await call("/api/cms/notices", {
+      method: "POST",
+      body: { title: "শেয়ার করা নথি দুই", body: "একই নথি দুটি নোটিশে।", published_at: "2026-12-07", status: "published", file: { path: sharedKey, name: "shared.pdf", mime: "application/pdf", bytes: 160 } },
+    });
+    assert(first.status === 201 && second.status === 201, `${first.status}/${second.status}`);
+    const { json: purged } = await call(`/api/cms/notices?id=${first.json.item.id}&action=purge`, { method: "POST", body: { confirm: "DELETE" } });
+    assert(purged.filesRemoved === 0 && purged.filesKept === 1, JSON.stringify(purged));
+    assert((await mediaStatus(sharedKey)) === 200, "purging one row deleted a file the other row still links");
+    assert((await mediaStatus(sharedKey, { anonymous: true })) === 200, "the surviving row's attachment lost its public link");
+    const { json: last } = await call(`/api/cms/notices?id=${second.json.item.id}&action=purge`, { method: "POST", body: { confirm: "DELETE" } });
+    assert(last.filesRemoved === 1, JSON.stringify(last));
+    assert((await mediaStatus(sharedKey)) >= 400, "nothing points at the object and it is still in storage");
+  });
+  await check("only a purge frees bytes — an edit leaves an orphan in place", async () => {
+    // An edit that swaps a file no longer deletes what it replaced, so the replaced
+    // object is still in storage even though no row names it now. That is the point:
+    // nothing but DELETE-on-purge ever removes bytes.
+    assert((await mediaStatus(replacedKey)) === 200, "an orphaned attachment was removed by an edit");
+    assert((await mediaStatus(replacedKey, { anonymous: true })) === 403, "an unreferenced object became world-readable");
+  });
+  await check("the paging rows are cleaned up and leave no bytes behind", async () => {
+    for (const id of pagedNoticeIds) await call(`/api/cms/notices?id=${id}&action=purge`, { method: "POST", body: { confirm: "DELETE" } });
+    const { json: feed } = await call("/api/public/notices?limit=100");
+    for (const id of pagedNoticeIds) assert(!feed.notices.some((row) => row.id === id), "a purged row is still public");
+    assert((await mediaStatus(keptKey)) >= 400, "the last row's attachment survived its purge");
+    const left = await countFiles(path.join(tempDir, "media"));
+    assert(left === 1, `${left} file(s) left in storage; only the object an edit orphaned should remain`);
+  });
+
   console.log("\n— cleanup —");
   await check("logging out drops the session server-side", async () => {
     const { status } = await call("/api/cms/logout", { method: "POST" });
