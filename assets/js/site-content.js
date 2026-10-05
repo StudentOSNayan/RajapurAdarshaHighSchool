@@ -225,23 +225,38 @@
    * Photos are written in the same `article > button` shape the curated gallery
    * uses, so the existing filter buttons and the lightbox keep working — main.js
    * re-scans after the `site-content:gallery` event below.
+   *
+   * Published photos are ADDED to the grid and to the home strip; they never
+   * substitute for it. The tiles in the HTML are the school's own pictures and are
+   * left exactly as authored. Each inserted tile carries data-cms-photo="<photo id>"
+   * so a re-render removes only what this function put there — the same photo can
+   * never be added twice and the count cannot drift, whatever else is on the page.
    */
+  const dropCmsTiles = (container) => {
+    for (const tile of container.querySelectorAll("[data-cms-photo]")) tile.remove();
+  };
+
   const renderGallery = (albums) => {
     const grid = (containers.get("gallery") || [])[0];
     const strip = (containers.get("photo-strip") || [])[0];
     const flat = [];
+    const seen = new Set();
     for (const album of albums || []) {
       for (const photo of album.photos || []) {
+        if (!photo.id || seen.has(photo.id)) continue; // one tile per photo, always
+        seen.add(photo.id);
         flat.push({ ...photo, album });
       }
     }
 
     if (grid) {
+      dropCmsTiles(grid);
       if (flat.length) {
         const fragment = document.createDocumentFragment();
         for (const photo of flat) {
           const item = el("article", "gallery-item");
           item.dataset.galleryItem = "";
+          item.dataset.cmsPhoto = photo.id;
           if (photo.album.category) item.dataset.tags = photo.album.category;
           const trigger = el("button", "gallery-card");
           trigger.type = "button";
@@ -269,29 +284,34 @@
           item.append(trigger);
           fragment.append(item);
         }
-        grid.replaceChildren(fragment);
-        document.dispatchEvent(new CustomEvent("site-content:gallery"));
+        grid.append(fragment);
       }
-      /* With no published photo the curated grid in the page is left untouched. */
+      /* Whether the feed added tiles or had nothing to add, the page re-counts and
+       * re-filters: curated tiles keep their authored place either way. */
+      document.dispatchEvent(new CustomEvent("site-content:gallery"));
     }
 
-    if (strip && flat.length) {
-      const fragment = document.createDocumentFragment();
-      for (const photo of flat.slice(0, 4)) {
-        const link = el("a");
-        link.href = "gallery.html";
-        link.setAttribute("aria-label", `গ্যালারি খুলুন: ${photo.caption || photo.album.title}`);
-        const image = el("img");
-        image.setAttribute("src", photo.thumb);
-        image.setAttribute("alt", photo.alt || photo.album.title);
-        image.setAttribute("width", String(photo.width || 1200));
-        image.setAttribute("height", String(photo.height || 900));
-        image.setAttribute("loading", "lazy");
-        image.setAttribute("decoding", "async");
-        link.append(image);
-        fragment.append(link);
+    if (strip) {
+      dropCmsTiles(strip);
+      if (flat.length) {
+        const fragment = document.createDocumentFragment();
+        for (const photo of flat.slice(0, 4)) {
+          const link = el("a");
+          link.href = "gallery.html";
+          link.dataset.cmsPhoto = photo.id;
+          link.setAttribute("aria-label", `গ্যালারি খুলুন: ${photo.caption || photo.album.title}`);
+          const image = el("img");
+          image.setAttribute("src", photo.thumb);
+          image.setAttribute("alt", photo.alt || photo.album.title);
+          image.setAttribute("width", String(photo.width || 1200));
+          image.setAttribute("height", String(photo.height || 900));
+          image.setAttribute("loading", "lazy");
+          image.setAttribute("decoding", "async");
+          link.append(image);
+          fragment.append(link);
+        }
+        strip.append(fragment);
       }
-      strip.replaceChildren(fragment);
     }
   };
 

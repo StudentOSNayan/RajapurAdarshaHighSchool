@@ -11,7 +11,7 @@ import { spawn } from "node:child_process";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { JSDOM } from "jsdom";
+import { JSDOM, VirtualConsole } from "jsdom";
 
 const ROOT = path.join(path.dirname(new URL(import.meta.url).pathname), "..");
 const PORT = 8200 + Math.floor(Math.random() * 60);
@@ -83,17 +83,25 @@ const call = async (pathname, options = {}, jar = {}) => {
 
 const render = async (page, { scripts = true } = {}) => {
   const html = await (await fetch(`${BASE}/${page}`)).text();
-  const dom = new JSDOM(html, { url: `${BASE}/${page}`, runScripts: scripts ? "outside-only" : undefined, pretendToBeVisual: true });
+  const errors = [];
+  const virtualConsole = new VirtualConsole();
+  virtualConsole.on("jsdomError", (event) => errors.push(String(event?.message || event)));
+  virtualConsole.on("error", (...parts) => errors.push(parts.join(" ")));
+  const dom = new JSDOM(html, { url: `${BASE}/${page}`, runScripts: scripts ? "outside-only" : undefined, pretendToBeVisual: true, virtualConsole });
+  dom.window.addEventListener("error", (event) => errors.push(event.message));
+  dom.pageErrors = errors;
   dom.window.fetch = (input, init) => fetch(new URL(input, BASE), init);
   dom.window.CustomEvent = dom.window.CustomEvent || Event;
   if (scripts) {
     const siteContent = await fs.readFile(path.join(ROOT, "assets/js/site-content.js"), "utf8");
-    const main = await fs.readFile(path.join(ROOT, "assets/js/main.js"), "utf8");
     dom.window.eval(siteContent);
-    dom.window.eval(main);
+    if (scripts !== "cms-only") {
+      const main = await fs.readFile(path.join(ROOT, "assets/js/main.js"), "utf8");
+      dom.window.eval(main);
+    }
     for (let tick = 0; tick < 40; tick += 1) {
       await new Promise((resolve) => setTimeout(resolve, 25));
-      if (dom.window.document.documentElement.classList.contains("cms-ready")) break;
+      if (dom.window.document.documentElement.classList.contains("cms-ready") || !dom.window.document.querySelector("[data-cms]")) break;
     }
     await new Promise((resolve) => setTimeout(resolve, 60));
   }
@@ -221,42 +229,195 @@ try {
     assert(homeDoc.querySelectorAll(".fact-grid .fact").length === 5, "quick facts altered");
     assert(homeDoc.querySelector(".brand-mark img").getAttribute("src") === "file_000000007e208211b50fdcafeeae9f2e.png", "logo changed");
   });
-  await check("home photo strip switches to published photos only", () => {
+  await check("home photo strip keeps its static photos and adds the published ones", () => {
     const strip = homeDoc.querySelector('[data-cms="photo-strip"]');
-    const images = strip.querySelectorAll("img");
-    assert(images.length === 2, `images ${images.length}`);
-    assert([...images].every((image) => image.getAttribute("src").startsWith("/api/media?path=")), "not from the CMS");
-    assert([...images].every((image) => image.getAttribute("loading") === "lazy"), "not lazy loaded");
+    const links = [...strip.querySelectorAll("a")];
+    const images = links.map((link) => link.querySelector("img"));
+    assert(images.length === 6, `images ${images.length}`); // 4 authored + 2 published
+    const authored = links.filter((link) => !link.hasAttribute("data-cms-photo"));
+    const added = links.filter((link) => link.hasAttribute("data-cms-photo"));
+    assert(authored.length === 4 && added.length === 2, `authored ${authored.length}, added ${added.length}`);
+    assert(authored[0].querySelector("img").getAttribute("src") === "assets/img/students-program.webp", "the first authored strip photo moved");
+    assert(authored.every((link) => !link.getAttribute("src") && !link.dataset.cmsPhoto), "an authored tile was altered");
+    assert(added.every((link) => link.querySelector("img").getAttribute("src").startsWith("/api/media?path=")), "not from the CMS");
+    assert(added.every((link) => link.querySelector("img").getAttribute("loading") === "lazy"), "added photos are not lazy loaded");
+    assert(added.every((link) => link.getAttribute("href") === "gallery.html"), "added link no longer points at the gallery page");
   });
+
+  /** Renders the real gallery page with a chosen feed, so photo counts can be
+   *  pinned exactly without disturbing the seeded database. */
+  const renderGalleryWith = async (albums) => {
+    const html = await (await fetch(`${BASE}/gallery.html`)).text();
+    const errors = [];
+    const virtualConsole = new VirtualConsole();
+    virtualConsole.on("jsdomError", (event) => errors.push(String(event?.message || event)));
+    virtualConsole.on("error", (...parts) => errors.push(parts.join(" ")));
+    const dom = new JSDOM(html, { url: `${BASE}/gallery.html`, runScripts: "outside-only", pretendToBeVisual: true, virtualConsole });
+    dom.window.fetch = async () => ({ ok: true, json: async () => ({ ok: true, albums }) });
+    dom.window.addEventListener("error", (event) => errors.push(event.message));
+    dom.window.eval(await fs.readFile(path.join(ROOT, "assets/js/site-content.js"), "utf8"));
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    dom.pageErrors = errors;
+    return dom;
+  };
+  const feedAlbum = (id, title, photos) => ({ id, title, category: "campus", date: "2026-10-01", date_label: "১ অক্টোবর ২০২৬", photo_count: photos.length, photos });
+  const feedPhoto = (id) => ({
+    id,
+    alt: `ক্যাম্পাসের ছবি ${id}`,
+    caption: null,
+    width: 1200,
+    height: 900,
+    thumb: `/api/media?path=images%2F2026-10%2F${id}.webp&w=800&h=600&q=72`,
+    full: `/api/media?path=images%2F2026-10%2F${id}.webp`,
+  });
+  const gridItems = (doc) => doc.querySelectorAll('[data-cms="gallery"] [data-gallery-item]');
 
   console.log("\n— gallery page —");
   const galleryDom = await render("gallery.html");
+  const galleryStatic = await render("gallery.html", { scripts: false });
   const galleryDoc = galleryDom.window.document;
-  await check("published photos render in the curated grid structure", () => {
-    const items = galleryDoc.querySelectorAll('[data-cms="gallery"] [data-gallery-item]');
-    assert(items.length === 2, `items ${items.length}`);
-    const first = items[0];
+  await check("published photos are added after the 17 curated tiles, in the curated markup", () => {
+    const items = [...galleryDoc.querySelectorAll('[data-cms="gallery"] [data-gallery-item]')];
+    assert(items.length === 19, `items ${items.length}`);
+    const curated = items.filter((item) => !item.hasAttribute("data-cms-photo"));
+    const added = items.filter((item) => item.hasAttribute("data-cms-photo"));
+    assert(curated.length === 17 && added.length === 2, `curated ${curated.length}, added ${added.length}`);
+    assert(curated.every((item, index) => item === items[index]), "a published photo was inserted before the curated ones");
+    assert(added.every((item) => item.classList.contains("gallery-item")), "added tile does not use the curated tile class");
+    assert(added.every((item) => item.querySelector(":scope > button.gallery-card > span.gallery-image-wrap > img")), "added tile does not use the curated tile structure");
+    const first = added[0];
     assert(first.dataset.tags === "tours", `tags ${first.dataset.tags}`);
     const trigger = first.querySelector("[data-gallery-open]");
     assert(trigger.dataset.image.startsWith("/api/media?path="), "lightbox source wrong");
+    assert(trigger.querySelector("img").getAttribute("src").startsWith("/api/media?path="), "thumbnail source wrong");
     assert(trigger.querySelector("img").alt.length > 3, "missing alt text");
     assert(trigger.querySelector(".gallery-card-caption strong").textContent.length > 3, "missing caption");
   });
-  await check("existing category filters apply to CMS photos", () => {
+  await check("the 17 curated photos keep their exact authored paths", () => {
+    const before = galleryStatic.window.document.querySelectorAll(".gallery-grid > [data-gallery-item] img");
+    const after = [...galleryDoc.querySelectorAll('[data-cms="gallery"] [data-gallery-item]:not([data-cms-photo]) img')];
+    assert(before.length === 17 && after.length === 17, `${before.length} vs ${after.length}`);
+    for (let index = 0; index < 17; index += 1) {
+      assert(after[index].getAttribute("src") === before[index].getAttribute("src"), `tile ${index} changed src`);
+    }
+    assert(after[0].getAttribute("src") === "assets/img/campus-hero.webp", "the first curated photo is not campus-hero");
+  });
+  await check("a second render adds no duplicate tiles and keeps the count at 19", async () => {
+    const siteContent = await fs.readFile(path.join(ROOT, "assets/js/site-content.js"), "utf8");
+    galleryDom.window.eval(siteContent); // the same page rendered again, e.g. after a refetch
+    for (let tick = 0; tick < 40; tick += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      if (galleryDoc.querySelectorAll('[data-cms="gallery"] [data-cms-photo]').length === 2) break;
+    }
+    const items = galleryDoc.querySelectorAll('[data-cms="gallery"] [data-gallery-item]');
+    const added = galleryDoc.querySelectorAll('[data-cms="gallery"] [data-cms-photo]');
+    assert(items.length === 19, `items ${items.length}`);
+    assert(added.length === 2, `added tiles ${added.length}`);
+    const ids = new Set([...added].map((tile) => tile.dataset.cmsPhoto));
+    assert(ids.size === 2, `photo ids reused: ${[...ids].join(",")}`);
+    assert(galleryDoc.querySelectorAll('[data-cms="photo-strip"]').length === 0, "the gallery page should not own a strip");
+  });
+  await check("appended tiles flow inside the existing grid, so mobile cannot overflow", async () => {
+    // The two containers are CSS grids whose columns are minmax(0, 1fr), so an extra
+    // tile always starts a new row instead of widening the page. Pinned here because
+    // the added tiles are the only new DOM this feature puts on a public page.
+    const css = await fs.readFile(path.join(ROOT, "assets/css/style.css"), "utf8");
+    for (const selector of [".gallery-grid", ".photo-strip"]) {
+      const rule = css.slice(css.indexOf(`${selector} {`)).split("}")[0];
+      assert(/display:\s*grid/.test(rule) && /minmax\(0,\s*1fr\)/.test(rule), `${selector} is not a fluid grid: ${rule.slice(0, 120)}`);
+    }
+    const tile = galleryDoc.querySelector('[data-cms="gallery"] [data-cms-photo]');
+    assert(tile.parentElement.classList.contains("gallery-grid"), "a published tile landed outside the grid container");
+    assert(!tile.getAttribute("style") && !tile.querySelector("img").getAttribute("style"), "an added tile carries inline styles that could override the layout");
+    const addedImgs = [...galleryDoc.querySelectorAll('[data-cms="gallery"] [data-cms-photo] img')];
+    assert(addedImgs.every((img) => img.getAttribute("width") && img.getAttribute("height")), "added images need intrinsic size to avoid layout shift");
+  });
+  await check("published tiles bring no class the stylesheet does not already know", () => {
+    const tile = galleryDoc.querySelector('[data-cms="gallery"] [data-cms-photo]');
+    const classes = new Set(["gallery-item", "gallery-card"]);
+    tile.querySelectorAll("*").forEach((node) => node.classList.forEach((name) => classes.add(name)));
+    return checkClassesAgainstStylesheet([...classes]);
+  });
+  await check("no gallery or home script error on the merged page", () => {
+    assert(galleryDom.pageErrors.length === 0, galleryDom.pageErrors.join(" | "));
+    assert(homeDom.pageErrors.length === 0, homeDom.pageErrors.join(" | "));
+  });
+  await check("existing category filters count and filter curated plus published photos together", () => {
     const status = galleryDoc.getElementById("galleryStatus");
-    assert(/২টি ছবি|2টি ছবি/.test(status.textContent), status.textContent);
+    assert(/১৯টি ছবি|19টি ছবি/.test(status.textContent), status.textContent);
+    const visible = () => [...galleryDoc.querySelectorAll("[data-gallery-item]")].filter((item) => !item.hidden).length;
+    // one curated tile carries the tours tag, two published ones do too
     galleryDoc.querySelector('[data-filter="tours"]').dispatchEvent(new galleryDom.window.MouseEvent("click", { bubbles: true }));
-    assert([...galleryDoc.querySelectorAll("[data-gallery-item]")].filter((item) => !item.hidden).length === 2, "filter mismatch");
+    assert(visible() === 3, `tours visible ${visible()}`);
+    // the tree tag exists only among the curated photos
     galleryDoc.querySelector('[data-filter="tree"]').dispatchEvent(new galleryDom.window.MouseEvent("click", { bubbles: true }));
-    assert([...galleryDoc.querySelectorAll("[data-gallery-item]")].filter((item) => !item.hidden).length === 0, "filter leaked other tags");
+    assert(visible() === 2, `tree visible ${visible()}`);
+    assert(galleryDoc.querySelectorAll('[data-cms-photo]:not([hidden])').length === 0, "a published tile leaked into the tree filter");
+    galleryDoc.querySelector('[data-filter="all"]').dispatchEvent(new galleryDom.window.MouseEvent("click", { bubbles: true }));
+    assert(visible() === 19, `all visible ${visible()}`);
   });
   await check("lightbox opens for a CMS photo", () => {
-    const trigger = galleryDoc.querySelector('[data-cms="gallery"] [data-gallery-open]');
+    const trigger = galleryDoc.querySelector('[data-cms="gallery"] [data-cms-photo] [data-gallery-open]');
     trigger.dispatchEvent(new galleryDom.window.MouseEvent("click", { bubbles: true }));
     const image = galleryDoc.getElementById("lightboxImage");
     assert(image.getAttribute("src") === trigger.dataset.image, `lightbox src ${image.getAttribute("src")}`);
     assert(galleryDoc.getElementById("lightboxTitle").textContent.length > 0, "no lightbox title");
   });
+
+  await check("one published photo means exactly 18 tiles: 17 curated plus it", async () => {
+    const dom = await renderGalleryWith([feedAlbum("a1", "নবম শ্রেণির ক্লাসরুম", [feedPhoto("p1")])]);
+    const items = gridItems(dom.window.document);
+    assert(items.length === 18, `items ${items.length}`);
+    assert(items[0].querySelector("img").getAttribute("src") === "assets/img/campus-hero.webp", "the curated first tile moved");
+    assert(items[17].hasAttribute("data-cms-photo"), "the published tile is not the last one");
+    assert(items[17].querySelector("img").getAttribute("src").startsWith("/api/media?path="), "not using the media route");
+    assert(dom.pageErrors.length === 0, dom.pageErrors.join(" | "));
+  });
+  await check("every published photo is added, never a curated one removed", async () => {
+    const dom = await renderGalleryWith([
+      feedAlbum("a1", "বার্ষিক ক্রীড়া", [feedPhoto("p1"), feedPhoto("p2")]),
+      feedAlbum("a2", "শিক্ষা সফর", [feedPhoto("p3"), feedPhoto("p4"), feedPhoto("p5")]),
+    ]);
+    const items = [...gridItems(dom.window.document)];
+    assert(items.length === 22, `items ${items.length}`); // 17 + 5
+    const curated = items.filter((item) => !item.hasAttribute("data-cms-photo"));
+    assert(curated.length === 17, `curated ${curated.length}`);
+    assert(new Set(items.filter((i) => i.hasAttribute("data-cms-photo")).map((i) => i.dataset.cmsPhoto)).size === 5, "not every published photo got a tile");
+    assert(dom.pageErrors.length === 0, dom.pageErrors.join(" | "));
+  });
+  await check("the same photo id twice in a feed still yields one tile", async () => {
+    const dom = await renderGalleryWith([
+      feedAlbum("a1", "একই ছবি দুই অ্যালবামে", [feedPhoto("p1"), feedPhoto("p2")]),
+      feedAlbum("a2", "দ্বিতীয় অ্যালবাম", [feedPhoto("p1")]),
+    ]);
+    const added = dom.window.document.querySelectorAll('[data-cms="gallery"] [data-cms-photo]');
+    assert([...gridItems(dom.window.document)].length === 19, `items ${gridItems(dom.window.document).length}`);
+    assert(added.length === 2, `added ${added.length}`);
+    assert([...added].every((tile) => tile.dataset.cmsPhoto === "p1" || tile.dataset.cmsPhoto === "p2"), "unexpected tile ids");
+  });
+  await check("every added tile's media URL resolves 200 with an image content type", async () => {
+    const srcs = [...galleryDoc.querySelectorAll('[data-cms="gallery"] [data-cms-photo] img')].map((img) => img.getAttribute("src"));
+    assert(srcs.length === 2, `srcs ${srcs.length}`);
+    for (const src of srcs) {
+      const response = await fetch(`${BASE}${src}`);
+      const type = response.headers.get("content-type") || "";
+      assert(response.status === 200 && type.startsWith("image/"), `${src} → ${response.status} ${type}`);
+      const full = galleryDoc.querySelector(`[data-cms-photo] [data-gallery-open][data-image]`)?.dataset.image;
+      assert(src.includes("images%2F") && full.startsWith("/api/media?path="), "media url shape changed");
+    }
+  });
+
+  console.log("\n— pages with no CMS hook are not touched by the content script —");
+  for (const page of ["academics.html", "admission.html", "contact.html", "about.html"]) {
+    await check(`${page} is byte-for-byte the authored page`, async () => {
+      const plain = await render(page, { scripts: false });
+      const withCms = await render(page, { scripts: "cms-only" });
+      const main = (document) => document.querySelector("main").innerHTML;
+      assert(main(withCms.window.document) === main(plain.window.document), "the content script altered the page");
+      assert(withCms.window.document.querySelectorAll("[data-cms], [data-cms-photo]").length === 0, "a CMS container or tile appeared on a page without a hook");
+      assert(withCms.pageErrors.length === 0, withCms.pageErrors.join(" | "));
+    });
+  }
 
   /* --------------------------------------------------- empty CMS, static site */
   seeded.server.kill("SIGTERM");
