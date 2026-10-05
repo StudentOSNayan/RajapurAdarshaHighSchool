@@ -304,9 +304,10 @@ async function handlePublicRoute(req, res, segments, query) {
  * is allowed to see (their own drafts) — guessing a UUID is not enough.
  */
 async function handleMediaRoute(req, res, segments, query) {
-  // /api/media?path=images/2026-10/<uuid>.jpg — one segment, because Vercel only
-  // routes /api/<group>/<one segment> to this file. The old /api/media/<key> form
-  // still resolves, and the same strict pattern validates both.
+  // /api/media?path=images/2026-10/<uuid>.jpg — the key travels in the query string
+  // because the entry file is api/media.mjs, which Vercel maps to exactly /api/media.
+  // The segments fallback only ever fires on the local dev server (which mounts the
+  // handler by prefix); the same strict pattern below validates either form.
   const key = query.get("path") || segments.join("/");
   if (!/^(images|docs)\/\d{4}-\d{2}\/[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.(jpg|png|webp|gif|pdf)$/.test(key)) {
     throw badRequest("ফাইলের ঠিকানা সঠিক নয়।");

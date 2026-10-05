@@ -112,23 +112,28 @@ still serves the public site alone, but `/api` needs Node, so use `npm run dev`.
 
 ## URL shape rule (why actions are query parameters)
 
-Vercel maps `/api/<group>/<one segment>` onto `api/<group>/[...path].mjs` and nothing
-deeper, so `/api/cms/notices/publish` would never reach the handler on a deployment
-(it 404s as a static miss, which the dashboard shows as "অনুরোধ ব্যর্থ (HTTP 404)").
-Actions therefore ride on the query string — `POST /api/cms/notices?id=…&action=publish`
-— and storage keys on `/api/media?path=images/2026-10/<uuid>.jpg`. The older
-`/resource/action` form still resolves, for anything that already uses it.
-`npm run test:routes` keeps every dashboard and public URL one segment deep.
+Vercel derives an API route from each file under `api/`: a folder catch-all
+`api/<group>/[...path].mjs` answers `/api/<group>/<one-or-more segments>` and *not*
+`/api/<group>` itself, while a top-level `api/media.mjs` answers exactly `/api/media`.
+A URL outside that table never reaches any code — it 404s as a platform miss with an
+HTML body, which the dashboard shows as "অনুরোধ ব্যর্থ (HTTP 404)" and an `<img>` shows
+as a blank tile. So actions ride on the query string
+(`POST /api/cms/notices?id=…&action=publish`), storage keys ride on
+`/api/media?path=images/2026-10/<uuid>.jpg` (the entry file is `api/media.mjs`, one
+level up, precisely because that is the URL `mediaUrl()` mints), and the older
+`/resource/action` form still resolves for anything that already uses it.
+`npm run test:routes` matches every minted URL against the real layout of `api/`, not
+just its segment count — counting alone was fooled twice, once by `/api/media`.
 
 ## Tests
 
 ```bash
 cd tools
-npm test             # 55 API + security + dashboard checks (no npm packages needed)
+npm test             # 57 API + security + dashboard checks (no npm packages needed)
 npm run test:config  # 16 checks: service-role key validation + drivers vs schema.sql
-npm run test:routes  # 16 checks: every URL is routable + notice/photo/media lifecycles
+npm run test:routes  # 18 checks: every URL is matched by a deployed file + lifecycles
 npm run test:public  # 18 checks: the real pages render CMS content into the approved markup
-npm run test:admin   # 12 checks: the teacher's actual clicks, end to end
+npm run test:admin   # 14 checks: the teacher's actual clicks, end to end
 ```
 
 They start a throwaway server against a temporary data folder and fail loudly if any

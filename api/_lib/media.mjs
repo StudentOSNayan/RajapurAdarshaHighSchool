@@ -158,10 +158,11 @@ export async function deleteMedia(pathValue) {
 
 /** The only URL shape a browser is ever given for a stored object. */
 /**
- * The only media URL shape the browser is ever given: one path segment plus the
- * object key as a query parameter. A storage key is `images/2026-10/<uuid>.jpg` —
- * three segments — and Vercel's function routing only maps /api/media/<one segment>
- * to the handler, so embedding the key in the path would 404 on a real deployment.
+ * The only media URL shape the browser is ever given: the media function's own path
+ * plus the object key as a query parameter. A storage key is `images/2026-10/<uuid>.jpg`
+ * — three segments — and Vercel maps a function file to its own path and the one
+ * segment under it, so a key carried in the path would land past the mapped route and
+ * 404 before any code ran. api/media.mjs is therefore reached as /api/media?path=…
  */
 export const mediaUrl = (pathValue, transform = null) => {
   if (!pathValue) return null;

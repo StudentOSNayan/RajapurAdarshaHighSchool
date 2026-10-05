@@ -1,13 +1,18 @@
 #!/usr/bin/env node
-/* The admin and public URLs must stay one segment deep.
+/* Every URL the browser is told to request must be answered by a deployed function.
  *
- * Vercel's zero-config function routing maps /api/<group>/<one segment> onto the
- * catch-all file in api/, and nothing deeper. A path like
- * /api/cms/notices/publish therefore never reaches the handler on a real
- * deployment: it 404s as a static miss, with an HTML body, which the dashboard
- * reports as "অনুরোধ ব্যর্থ (HTTP 404)". Actions ride on ?action= and storage
- * keys on ?path= instead. This test enforces that rule statically (so nobody can
- * reintroduce it) and end to end (so every action really works).
+ * Vercel derives its API routes from the files under api/: a top-level api/media.mjs
+ * answers /api/media and nothing deeper, while a folder catch-all api/cms/[...path].mjs
+ * answers /api/cms/<one-or-more segments>. A URL outside that table never reaches any
+ * code — it 404s as a platform miss with an HTML body, which the dashboard reports as
+ * "অনুরোধ ব্যর্থ (HTTP 404)" and an <img> reports as a blank tile. So actions ride on
+ * ?action= and storage keys on ?path=, and each group's URL keeps exactly the depth its
+ * own file provides.
+ *
+ * Counting segments is not enough, and it has already been fooled twice: /api/media
+ * looks legal at a glance, but it only 404s or works depending on whether the media
+ * entry file sits at api/media.mjs or inside api/media/. So the check below reads the
+ * real directory layout and matches each URL against it, the way Vercel does.
  *
  *   cd tools && node test-api-routes.mjs
  */
@@ -108,6 +113,77 @@ await check("mediaUrl() puts the storage key in the query string", async () => {
   const params = new URLSearchParams(thumb.split("?")[1]);
   assert(params.get("path") === key && Number(params.get("w")) > 0, thumb);
   assert(mediaUrl(null) === null, "no file must produce no url");
+});
+
+/* ------------------------------------------------- the real Vercel route table */
+
+/** The function files Vercel would deploy, relative to api/. A leading-underscore
+ *  folder (api/_lib) is shared code and never a route. */
+const entryFiles = await (async () => {
+  const found = [];
+  const walk = async (dir, prefix = "") => {
+    for (const entry of await fs.readdir(dir, { withFileTypes: true }).catch(() => [])) {
+      const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        if (!entry.name.startsWith("_") && !entry.name.startsWith(".")) await walk(path.join(dir, entry.name), rel);
+      } else if (/\.(mjs|js)$/.test(entry.name)) found.push(rel);
+    }
+  };
+  await walk(path.join(ROOT, "api"));
+  return found.sort();
+})();
+
+/** The URL region one deployed file answers, per Vercel's file routing. */
+const routeOf = (rel) => {
+  const parts = rel.replace(/\.(mjs|js)$/, "").split("/");
+  const catchAll = parts.at(-1).startsWith("[...");
+  const own = catchAll ? parts.slice(0, -1) : parts; // the folder the file stands in
+  return {
+    file: rel,
+    prefix: own.join("/"),
+    depth: own.length,
+    // /api/cms/<one or more> for a catch-all; exactly its own path for a plain file.
+    min: catchAll ? own.length + 1 : own.length,
+    max: catchAll ? Infinity : own.length,
+  };
+};
+
+const routes = entryFiles.map(routeOf);
+
+const segmentsAfterApi = (url) => String(url).split("?")[0].split("/").filter(Boolean).slice(1);
+
+/** Which deployed file answers this URL, if any. */
+const servedBy = (url) => {
+  const parts = segmentsAfterApi(url);
+  if (!parts.length) return null;
+  const hit = routes.find((route) => route.prefix === parts.slice(0, route.depth).join("/") && parts.length >= route.min && parts.length <= route.max);
+  return hit ? hit.file : null;
+};
+
+await check("every frontend URL is matched by a deployed function file under api/", async () => {
+  const { mediaUrl } = await import("file://" + path.join(ROOT, "api/_lib/media.mjs"));
+  const key = "images/2026-10/2f2a1b6c-0000-4000-8000-abcdefabcdef.webp";
+  const urls = [
+    ...collected["admin/admin.js"].map((url) => (url.startsWith("/api") ? url : `/api/cms${url.startsWith("/") ? "" : "/"}${url}`)),
+    ...collected["assets/js/site-content.js"],
+    mediaUrl(key),
+    mediaUrl(key, { width: 800, height: 600, quality: 72 }),
+  ];
+  assert(urls.length >= 20, `only ${urls.length} urls to match`);
+  const lost = urls.filter((url) => !servedBy(url));
+  assert(
+    lost.length === 0,
+    `${lost.join(", ")} → no file in ${JSON.stringify(entryFiles)} answers that depth; ` +
+      `move the entry file or shorten the url (Vercel maps api/x.mjs to /api/x only, api/x/[...path].mjs to /api/x/<segment+>)`,
+  );
+});
+await check("the media route is a top-level function, so /api/media?path=… resolves", () => {
+  const depth = segmentsAfterApi("/api/media?path=x").length;
+  assert(depth === 1, `media url is ${depth} segments deep`);
+  assert(entryFiles.includes("media.mjs"), `api/ holds ${JSON.stringify(entryFiles)} — /api/media needs api/media.mjs, not a media/ folder`);
+  assert(servedBy("/api/media?path=x") === "media.mjs", String(servedBy("/api/media?path=x")));
+  assert(servedBy("/api/cms/notices") === "cms/[...path].mjs", String(servedBy("/api/cms/notices")));
+  assert(!servedBy("/api/media/images/2026-10/x.jpg"), "a key in the path is deeper than api/media.mjs answers — that shape must not be minted");
 });
 
 /* ---------------------------------------------------------------- end to end */

@@ -416,17 +416,26 @@ try {
     assert(status === 200, `status ${status}`);
     const media = await call(`/api/media?path=${encodeURIComponent(pdfPath)}`, { raw: true });
     assert(media.status === 200 && media.buffer.subarray(0, 5).toString() === "%PDF-", `media ${media.status}`);
-    // The older path-style URL must keep resolving, and the feed must hand the browser
-    // the routable query form (Vercel only routes /api/<group>/<one segment>).
-    const legacy = await call(`/api/media/${pdfPath}`, { raw: true });
-    assert(legacy.status === 200, `legacy media path ${legacy.status}`);
-    // The URL handed to the browser — by the admin screen and, when the notice is
-    // published, by the public feed — must be the routable query form.
+    // One media URL exists: the query form, which is what api/media.mjs is mapped to.
+    // A path-style /api/media/<key> URL sits deeper than that file answers, so it must
+    // never be handed to a browser — the admin screen and the published feed are checked.
+    // (tools/test-api-routes.mjs matches every minted URL against the api/ layout.)
     const { json: adminRow } = await call(`/api/cms/notices?id=${noticeId}`);
     assert(adminRow.item.file.url.startsWith("/api/media?path="), `admin attachment url ${JSON.stringify(adminRow.item.file)}`);
     const { json: withFile } = await call("/api/public/notices");
     const feedRow = withFile.notices.find((candidate) => candidate.id === noticeId);
     if (feedRow) assert(String(feedRow.file.url).startsWith("/api/media?path="), `feed attachment url ${JSON.stringify(feedRow.file)}`);
+  });
+  await check("an unusable media key is answered by the app, not by the platform's 404", async () => {
+    // The regression this pins: /api/media?path=… once 404'd before reaching any code,
+    // because the entry file was api/media/[...path].mjs. Any error here is the handler's
+    // own JSON, which proves the route is mapped.
+    const { status, json } = await call("/api/media?path=images/../../secrets.txt");
+    assert(status === 400, `status ${status}`);
+    assert(json?.error === "bad_request" && /ঠিকানা/.test(String(json?.message)), JSON.stringify(json));
+    const missing = await call(`/api/media?path=${encodeURIComponent("images/2020-01/00000000-0000-4000-8000-000000000000.jpg")}`);
+    assert(missing.status === 403 || missing.status === 404, `unreferenced key → ${missing.status}`);
+    assert(missing.json?.message, JSON.stringify(missing.json));
   });
   await check("an arbitrary path cannot be smuggled as an attachment", async () => {
     const { status } = await call(`/api/cms/notices?id=${noticeId}`, { method: "PATCH", body: { file: { path: "../../etc/passwd", name: "x", mime: "text/plain", bytes: 1 } } });
