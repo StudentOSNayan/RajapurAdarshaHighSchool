@@ -123,6 +123,46 @@ const uploadFiles = (path, formData, onProgress) =>
     xhr.send(formData);
   });
 
+/* A Vercel function refuses any request whose body passes 4.5 MB — a ceiling *below*
+ * the per-file limit this app's server applies (api/_lib/config.mjs: maxImageBytes is
+ * 8 MB, maxFormBytes 24 MB). So a picker that put every chosen photo into one
+ * multipart body failed with a bare "আপলোড ব্যর্থ (HTTP 413)": the host rejected the
+ * request before api/cms/[...path].mjs ran, and Supabase never saw a byte. The admin
+ * therefore groups a selection into requests that stay inside a safe share of that
+ * ceiling and sends them one after another.
+ *
+ * 3.5 MB, rather than 4.4 MB, leaves room for the multipart framing plus the
+ * album_id / alt_text fields and for the host measuring the whole request instead of
+ * the file. Nothing here resizes, re-encodes or drops anything: the bytes the teacher
+ * picked are the bytes that go out, and size, type and permission remain the
+ * server's decision. A big file simply travels alone, which is how a 4 MB photo still
+ * gets through under a 4.5 MB ceiling — and why a file past that ceiling cannot be
+ * sent at all, exactly as the hints below tell the teacher. */
+const UPLOAD_HOST_LIMIT_MB = 4.5; // Vercel's own ceiling, and it is not configurable
+const UPLOAD_FILE_LIMIT_MB = 4.4; // a single file above this cannot pass that ceiling in any arrangement
+const UPLOAD_REQUEST_BUDGET_MB = 3.5; // what this screen aims for, leaving the host some room
+const UPLOAD_REQUEST_BUDGET_BYTES = Math.round(UPLOAD_REQUEST_BUDGET_MB * 1024 * 1024);
+
+/** Groups files into requests of at most maxBytes and at most maxFiles files. */
+const planUploadBatches = (files, { maxBytes = UPLOAD_REQUEST_BUDGET_BYTES, maxFiles = 6 } = {}) => {
+  const batches = [];
+  let batch = [];
+  let bytes = 0;
+  for (const file of files || []) {
+    const size = Number(file?.size) || 0;
+    // An oversized file is never split, shrunk or skipped: it gets its own request.
+    if (batch.length && (bytes + size > maxBytes || batch.length >= maxFiles)) {
+      batches.push(batch);
+      batch = [];
+      bytes = 0;
+    }
+    batch.push(file);
+    bytes += size;
+  }
+  if (batch.length) batches.push(batch);
+  return batches;
+};
+
 const confirmAction = ({ title, body, word = null, danger = true, yesLabel = "হ্যাঁ, করুন" }) =>
   new Promise((resolve) => {
     const dialog = $("#confirmDialog");
@@ -332,7 +372,7 @@ const renderDashboard = async () => {
         : h("p", { class: "row-body", text: "এখনো কোনো কার্যক্রম নেই।" }),
     ]),
 
-    h("div", { class: "notice-line" }, `সংরক্ষণ ব্যবস্থা: ${data.storage.driver === "supabase" ? "Supabase (প্রোডাকশন)" : "লোকাল ডেভ (শুধু পরীক্ষার জন্য)"} · সর্বোচ্চ ছবি ${Math.round(data.storage?.limits?.maxImageMb ?? state.limits?.maxImageMb ?? 8)} MB`),
+    h("div", { class: "notice-line" }, `সংরক্ষণ ব্যবস্থা: ${data.storage.driver === "supabase" ? "Supabase (প্রোডাকশন)" : "লোকাল ডেভ (শুধু পরীক্ষার জন্য)"} · সর্বোচ্চ ছবি ${Math.round(data.storage?.limits?.maxImageMb ?? state.limits?.maxImageMb ?? 8)} MB · একটি অনুরোধে হোস্ট ${UPLOAD_HOST_LIMIT_MB} MB পর্যন্ত চলে, তাই ছবি ${UPLOAD_REQUEST_BUDGET_MB} MB-এর অনুরোধে ভাগ হয়ে পাঠানো হয়`),
   );
   view.focus();
 };
@@ -729,7 +769,7 @@ const renderForm = async (resource, id) => {
         h("span", { class: "spacer" }),
         h("a", { class: "btn btn-quiet", href: `#/${resource}` }, id ? "বাতিল" : "তালিকায় ফিরুন"),
       ]),
-      h("p", { class: "hint", text: `ছবি বা PDF সংযুক্তি সর্বোচ্চ ${state.limits?.maxImageMb ?? 8} MB। ফোন থেকে ছবি তোলার পর তা যত ছোট করা যায়, তত দ্রুত আপলোড হবে।` }),
+      h("p", { class: "hint", text: `ছবি বা PDF সংযুক্তি সর্বোচ্চ ${state.limits?.maxImageMb ?? 8} MB — তবে হোস্ট ${UPLOAD_HOST_LIMIT_MB} MB-এর বড় অনুরোধ বাতিল করে, তাই ${UPLOAD_FILE_LIMIT_MB} MB-এর বড় ফাইল আগে ছোট (২০০০ পিক্সেলের নিচে) করে নিন।` }),
     ]),
   );
   view.focus();
@@ -757,32 +797,46 @@ const renderAlbum = async (resource, id) => {
   const picker = h("input", { id: "photoFiles", type: "file", accept: "image/jpeg,image/png,image/webp", multiple: true });
   const altDefault = h("input", { type: "text", placeholder: "বর্ণনা (alt) — সব ছবির জন্য (প্রযোজ্য হলে)", "aria-label": "ছবির বর্ণনা" });
   const bar = h("div", { class: "bar", hidden: true }, h("i", { style: "width:0%" }));
-  const statusLine = h("p", { class: "hint", text: `এই অ্যালবামে ${photos.length}টি ছবি। একবারে সর্বোচ্চ ${state.limits?.maxImagesPerUpload ?? 6}টি — বেশি হলে কয়েকবারে দিন।` });
+  const statusLine = h("p", { class: "hint", text: `এই অ্যালবামে ${photos.length}টি ছবি। একসাথে যত খুশি বেছে নিন — প্রতিটি অনুরোধ ${UPLOAD_REQUEST_BUDGET_MB} MB-এর বেশি হবে না।` });
 
   const doUpload = async () => {
     const files = [...(picker.files ?? [])];
     if (!files.length) return;
+    const batches = planUploadBatches(files, { maxFiles: state.limits?.maxImagesPerUpload ?? 6 });
     bar.hidden = false;
     bar.firstChild.style.width = "0%";
-    statusLine.textContent = `আপলোড হচ্ছে… ০/${files.length}`;
-    const data = new FormData();
-    data.set("album_id", id);
-    if (altDefault.value.trim()) data.set("alt_text", altDefault.value.trim());
-    files.slice(0, state.limits?.maxImagesPerUpload ?? 6).forEach((file) => data.append("files", file, file.name));
+    let sent = 0;
+    const added = [];
+    const failed = [];
     try {
-      const payload = await uploadFiles(`/api/cms/photos?action=upload`, data, (percent) => (bar.firstChild.style.width = `${percent}%`));
-      const failedCount = payload.failed?.length ?? 0;
+      for (const [index, batch] of batches.entries()) {
+        statusLine.textContent = `আপলোড হচ্ছে… অনুরোধ ${index + 1}/${batches.length} · ছবি ${sent + 1}–${sent + batch.length}/${files.length}`;
+        const data = new FormData();
+        data.set("album_id", id);
+        if (altDefault.value.trim()) data.set("alt_text", altDefault.value.trim());
+        batch.forEach((file) => data.append("files", file, file.name));
+        try {
+          const payload = await uploadFiles(`/api/cms/photos?action=upload`, data, (percent) => (bar.firstChild.style.width = `${percent}%`));
+          added.push(...(payload.photos ?? []));
+          failed.push(...(payload.failed ?? []));
+        } catch (failure) {
+          /* A whole request refused by the host stores nothing, so the rest of the
+           * selection is left on screen for a retry instead of being fired at the same
+           * wall one after another. */
+          statusLine.textContent = `আপলোড থেমে গেছে — ${failure.message} বাকি ${files.length - sent}টি ছবি এখনও পাঠানো হয়নি, আবার চাপুন।`;
+          toast(failure.message, "danger");
+          return;
+        }
+        sent += batch.length;
+      }
       toast(
-        failedCount
-          ? `${payload.photos.length}টি ছবি যোগ হয়েছে; ${failedCount}টি বাদ পড়েছে: ${payload.failed.map((f) => `${f.name}`).join(", ")}`
-          : `${payload.photos.length}টি ছবি যোগ হয়েছে।`,
-        failedCount ? "danger" : "ok",
+        failed.length
+          ? `${added.length}টি ছবি যোগ হয়েছে; ${failed.length}টি বাদ পড়েছে: ${failed.map((f) => `${f.name}`).join(", ")}`
+          : `${added.length}টি ছবি যোগ হয়েছে।`,
+        failed.length ? "danger" : "ok",
       );
       picker.value = "";
       route();
-    } catch (failure) {
-      statusLine.textContent = failure.message;
-      toast(failure.message, "danger");
     } finally {
       bar.hidden = true;
     }
@@ -876,7 +930,12 @@ const renderAlbum = async (resource, id) => {
           h("label", { for: "photoFiles", text: "ছবি বেছে নিন (একাধিক)" }),
           picker,
           altDefault,
-          h("p", { text: "সমর্থিত: JPEG, PNG, WebP — প্রতিটি সর্বোচ্চ " + (state.limits?.maxImageMb ?? 8) + " MB।" }),
+          h("p", {
+            text:
+              "সমর্থিত: JPEG, PNG, WebP। সার্ভার প্রতিটি ছবিতে সর্বোচ্চ " + (state.limits?.maxImageMb ?? 8) + " MB চল দেয়, কিন্তু হোস্ট " +
+              UPLOAD_HOST_LIMIT_MB + " MB-এর বড় অনুরোধ বাতিল করে — তাই ছবিগুলো " + UPLOAD_REQUEST_BUDGET_MB + " MB-এর ছোট ছোট অনুরোধে ভাগ হয়ে যায়। " +
+              "একটি ছবি " + UPLOAD_FILE_LIMIT_MB + " MB-এরও বড় হলে সেটি যে কোনো ভাবেই আপলোড হবে না — আগে ছোট (২০০০ পিক্সেলের নিচে) করে নিন।",
+          }),
           h("div", { class: "view-actions" }, [
             h("button", { class: "btn", type: "button", onclick: doUpload }, "আপলোড করুন"),
             h("button", { class: "btn btn-quiet", type: "button", onclick: () => { picker.value = ""; statusLine.textContent = "নির্বাচন বাতিল।"; } }, "নির্বাচন বাতিল"),

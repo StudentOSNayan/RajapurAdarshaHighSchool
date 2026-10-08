@@ -271,6 +271,196 @@ try {
     assert([...dom.window.document.querySelectorAll("#view button")].some((button) => button.textContent.includes("আপলোড করুন")), "no upload button");
     assert([...dom.window.document.querySelectorAll("#view button")].some((button) => button.textContent.includes("প্রকাশ করুন")), "no publish button");
   });
+  /* ---- gallery upload batching -------------------------------------------------
+   * Vercel refuses any function request whose body passes 4.5 MB, which is *below*
+   * the server's own per-file limit, so a selection sent as one multipart body died
+   * with a bare "HTTP 413" before our API ran and Supabase never saw a byte. The
+   * admin now splits a selection into safe cumulative batches. These checks drive the
+   * real doUpload against a recording XMLHttpRequest: no request is ever sent, so not
+   * even the local test store receives a file — nothing is uploaded anywhere.
+   */
+  console.log("\n— gallery upload batching —");
+  const MB = 1024 * 1024;
+  const SAFE_BATCH_BYTES = 3.5 * MB;
+  const settle = (ms = 80) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  const installFakeUploads = ({ failOn = 0 } = {}) => {
+    const requests = [];
+    let inFlight = 0;
+    let peakInFlight = 0;
+    class FakeXHR {
+      constructor() {
+        this.listeners = {};
+        this.upload = { addEventListener: () => {} };
+      }
+      open(method, url) {
+        this.method = method;
+        this.url = url;
+      }
+      setRequestHeader() {}
+      addEventListener(type, fn) {
+        this.listeners[type] = fn;
+      }
+      send(formData) {
+        const record = { url: this.url, fields: {}, files: [], bytes: 0 };
+        for (const [key, value] of formData.entries()) {
+          if (typeof value === "string") record.fields[key] = value;
+          else {
+            record.files.push({ name: value.name, size: value.size, type: value.type, blob: value });
+            record.bytes += value.size;
+          }
+        }
+        requests.push(record);
+        inFlight += 1;
+        peakInFlight = Math.max(peakInFlight, inFlight);
+        setTimeout(() => {
+          inFlight -= 1;
+          this.status = requests.length === failOn ? 413 : 201;
+          this.responseText =
+            this.status === 201
+              ? JSON.stringify({ ok: true, photos: record.files.map((file) => ({ id: `p-${file.name}`, name: file.name })), failed: [] })
+              : "FUNCTION_PAYLOAD_TOO_LARGE"; // the host's own body: not JSON, so the app can only quote the status
+          this.listeners.load?.();
+        }, 2);
+      }
+    }
+    dom.window.XMLHttpRequest = FakeXHR;
+    return { requests, peak: () => peakInFlight };
+  };
+
+  const photoFile = (name, size) => {
+    const bytes = new Uint8Array(size);
+    bytes.set(new TextEncoder().encode(`RAW:${name}:`)); // a marker the app must not disturb
+    return new dom.window.File([bytes], name, { type: "image/jpeg" });
+  };
+
+  const readHead = (blob, n = 24) =>
+    new Promise((resolve, reject) => {
+      const reader = new dom.window.FileReader();
+      reader.onload = () => resolve(String(reader.result).slice(0, n));
+      reader.onerror = () => reject(new Error("the recorded upload could not be read back"));
+      reader.readAsText(blob.slice(0, n));
+    });
+
+  /* The picker, the status line and the upload button must all come from one render,
+   * or a screen that is still being replaced would be measured instead of the one the
+   * click actually reaches. */
+  const openPhotoScreen = async (title) => {
+    const created = await fetch(`${BASE}/api/cms/albums`, {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: BASE, cookie: dom.window.document.cookie, "x-csrf-token": /rahs_csrf=([^;]+)/.exec(dom.window.document.cookie)?.[1] ?? "" },
+      body: JSON.stringify({ title, category: "campus", published_at: "2026-10-01", status: "draft" }),
+    });
+    const { item } = await created.json();
+    dom.window.location.hash = `#/albums/${item.id}/photos`;
+    dom.window.dispatchEvent(new dom.window.Event("hashchange"));
+    assert(
+      await waitFor(() => dom.window.document.querySelector("#view h1")?.textContent.includes(title) && dom.window.document.getElementById("photoFiles"), 80),
+      `the photo screen for “${title}” never opened`,
+    );
+    return item.id;
+  };
+
+  const hintsOf = (root = dom.window.document) => [...root.querySelectorAll("#view .hint")].map((node) => node.textContent).join(" | ");
+
+  const pickFiles = (files) => {
+    const picker = dom.window.document.getElementById("photoFiles");
+    Object.defineProperty(picker, "files", { value: files, configurable: true, writable: false });
+    picker.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+    return picker;
+  };
+
+  await check("eight 1.4 MB photos go out as several requests, none over the safe budget", async () => {
+    const albumId = await openPhotoScreen("batching — eight photos");
+    const fake = installFakeUploads();
+    try {
+      const files = Array.from({ length: 8 }, (_, index) => photoFile(`photo-${index + 1}.jpg`, Math.round(1.4 * MB)));
+      pickFiles(files);
+      click(dom, "#view button", "আপলোড করুন");
+      assert(await waitFor(() => fake.requests.length === 4, 160), `expected 4 requests, saw ${fake.requests.length}`);
+      const sizes = fake.requests.map((request) => request.files.length).join(",");
+      assert(sizes === "2,2,2,2", `batch sizes were ${sizes}`);
+      for (const request of fake.requests) {
+        assert(request.bytes <= SAFE_BATCH_BYTES, `a request carried ${(request.bytes / MB).toFixed(2)} MB`);
+        assert(request.fields.album_id === albumId, "a batch was aimed at the wrong album");
+        assert(request.url === "/api/cms/photos?action=upload", `unexpected endpoint ${request.url}`);
+      }
+      const names = new Set(fake.requests.flatMap((request) => request.files.map((file) => file.name)));
+      assert(names.size === 8, `only ${names.size} of 8 photos left the browser`);
+      assert(fake.peak() === 1, `${fake.peak()} requests were in flight at once — they must go one after another`);
+    } finally {
+      dom.window.XMLHttpRequest = undefined;
+    }
+  });
+
+  await check("the per-request file-count limit still bounds a batch of small photos", async () => {
+    await openPhotoScreen("batching — fourteen small photos");
+    const fake = installFakeUploads();
+    try {
+      const files = Array.from({ length: 14 }, (_, index) => photoFile(`small-${index + 1}.jpg`, 1024));
+      pickFiles(files);
+      click(dom, "#view button", "আপলোড করুন");
+      assert(await waitFor(() => fake.requests.length === 3, 160), `expected 3 requests, saw ${fake.requests.length}`);
+      const sizes = fake.requests.map((request) => request.files.length).join(",");
+      assert(sizes === "6,6,2", `batch sizes were ${sizes} — maxImagesPerUpload must still cap each request`);
+      const names = new Set(fake.requests.flatMap((request) => request.files.map((file) => file.name)));
+      assert(names.size === 14, `only ${names.size} of 14 photos were sent`);
+    } finally {
+      dom.window.XMLHttpRequest = undefined;
+    }
+  });
+
+  await check("a photo larger than the budget travels alone, unchanged", async () => {
+    await openPhotoScreen("batching — one oversized photo");
+    const fake = installFakeUploads();
+    try {
+      const big = photoFile("camera-original.jpg", Math.round(5 * MB));
+      const small = photoFile("phone-shot.jpg", 1 * MB);
+      pickFiles([big, small]);
+      click(dom, "#view button", "আপলোড করুন");
+      assert(await waitFor(() => fake.requests.length === 2, 160), `expected 2 requests, saw ${fake.requests.length}`);
+      const first = fake.requests[0];
+      assert(first.files.length === 1 && first.files[0].name === "camera-original.jpg", `the oversized photo shared its request: ${JSON.stringify(first.files.map((f) => f.name))}`);
+      assert(first.files[0].size === big.size, `size changed on the way out: ${first.files[0].size} vs ${big.size}`);
+      assert(first.files[0].type === "image/jpeg", "the declared type changed");
+      assert((await readHead(first.files[0].blob)).startsWith("RAW:camera-original.jpg:"), "the bytes were transformed on the way out");
+      assert(fake.requests[1].files.map((file) => file.name).join() === "phone-shot.jpg", "the second photo was swallowed with the first");
+    } finally {
+      dom.window.XMLHttpRequest = undefined;
+    }
+  });
+
+  await check("a request the host refuses stops the run, says so, and keeps the rest selected", async () => {
+    await openPhotoScreen("batching — refused by the host");
+    const fake = installFakeUploads({ failOn: 2 });
+    try {
+      const files = Array.from({ length: 8 }, (_, index) => photoFile(`shot-${index + 1}.jpg`, Math.round(1.4 * MB)));
+      const picker = pickFiles(files);
+      click(dom, "#view button", "আপলোড করুন");
+      assert(await waitFor(() => fake.requests.length === 2, 160), `expected to stop after 2 requests, saw ${fake.requests.length}`);
+      await settle(30);
+      assert(fake.requests.length === 2, `kept firing after a refusal (${fake.requests.length} requests)`);
+      const said = hintsOf();
+      assert(said.includes("আপলোড থেমে গেছে") && said.includes("HTTP 413"), `the screen did not report the refusal: ${said}`);
+      assert(said.includes("বাকি 6টি"), `the screen did not say how many photos remain: ${said}`);
+      assert(picker.files.length === 8, "the failed selection was cleared from the picker");
+    } finally {
+      dom.window.XMLHttpRequest = undefined;
+    }
+  });
+
+  await check("the upload screen states the real per-request limit", async () => {
+    await openPhotoScreen("batching — wording");
+    const lines = [...dom.window.document.querySelectorAll("#view p")].map((node) => node.textContent).join(" | ") + hintsOf();
+    assert(lines.includes("3.5 MB"), "the batching budget this screen applies is not stated");
+    assert(lines.includes("4.5 MB"), "the host's real request ceiling is not stated, so 3.5 MB would look like an invented rule");
+    assert(lines.includes("4.4 MB"), "the screen does not say plainly that one very large file cannot be uploaded at all");
+    assert(lines.includes("8 MB"), "the server's own per-file limit stopped being mentioned");
+    assert(lines.includes("বাতিল"), "the screen does not say the host refuses an oversized request");
+    assert(!/বেশি হলে কয়েকবারে দিন/.test(lines), "the screen still tells the teacher to split selections by hand");
+    await settle();
+  });
+
   await check("account screen changes a password", async () => {
     dom.window.location.hash = "#/account";
     dom.window.dispatchEvent(new dom.window.Event("hashchange"));
