@@ -222,7 +222,7 @@ const directUploadsEnabled = () => state.limits?.directUploads !== false;
  * The teacher's picking order is kept, so the album ends up in that order too. A file
  * is never resized, re-encoded, split or skipped — it only changes which door it uses.
  */
-const planUploadSteps = (files, { maxBytes = UPLOAD_REQUEST_BUDGET_BYTES, maxFiles = 6, direct = false } = {}) => {
+const planUploadSteps = (files, { maxBytes = UPLOAD_REQUEST_BUDGET_BYTES, directBytes = UPLOAD_FILE_LIMIT_BYTES, maxFiles = 6, direct = false } = {}) => {
   const steps = [];
   let batch = [];
   let bytes = 0;
@@ -233,7 +233,10 @@ const planUploadSteps = (files, { maxBytes = UPLOAD_REQUEST_BUDGET_BYTES, maxFil
   };
   for (const file of files || []) {
     const size = Number(file?.size) || 0;
-    if (direct && size > maxBytes) {
+    /* The form path still carries a lone photo up to the host's ceiling, so storage is
+     * used only where the platform physically cannot take the request — not merely
+     * because a batch would have been big. */
+    if (direct && size > directBytes) {
       flush();
       steps.push({ kind: "direct", file });
       continue;
@@ -256,7 +259,7 @@ const photoLimitHint = () => {
     `সমর্থিত: JPEG, PNG, WebP। সার্ভার প্রতিটি ছবিতে সর্বোচ্চ ${state.limits?.maxImageMb ?? 8} MB চল দেয়, কিন্তু হোস্ট ${UPLOAD_HOST_LIMIT_MB} MB-এর বড় অনুরোধ বাতিল করে — তাই ছবিগুলো ${UPLOAD_REQUEST_BUDGET_MB} MB-এর ছোট ছোট অনুরোধে ভাগ হয়ে যায়।`;
   return directUploadsEnabled()
     ? shared +
-        ` যে ছবি ${UPLOAD_REQUEST_BUDGET_MB} MB-এরও বড়, সেটি ফর্মের অনুরোধে না গিয়ে সরাসরি স্টোরেজে আপলোড হয় — তাই বড় ছবিও এখন ওঠে। সার্ভার আসল বাইট দেখেই সীমা মাপে, তাই ${UPLOAD_FILE_LIMIT_MB} MB-এর নিচে রাখলে সবচেয়ে সহজ।`
+        ` যে ছবি ${UPLOAD_FILE_LIMIT_MB} MB-এরও বড় — একটি অনুরোধে হোস্ট তাকে ধরে না — সেটি ফর্মের অনুরোধে না গিয়ে সরাসরি স্টোরেজে আপলোড হয়, তাই বড় ছবিও এখন ওঠে। সার্ভার আসল বাইট দেখেই সীমা মাপে।`
     : shared + ` একটি ছবি ${UPLOAD_FILE_LIMIT_MB} MB-এরও বড় হলে সেটি যে কোনো ভাবেই আপলোড হবে না — আগে ছোট (২০০০ পিক্সেলের নিচে) করে নিন।`;
 };
 
