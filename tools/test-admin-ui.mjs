@@ -566,8 +566,16 @@ try {
       const big = await realPhoto("edited-photo.png", 5_760_000); // what the teacher's edit measured
       pickFiles([big]);
       click(dom, "#view button", "আপলোড করুন");
+      // The commit row is read from the recorded response, and the recorder only holds
+      // `photo` once it has cloned and parsed that response — so wait for the
+      // observation too, not just for the album. Otherwise this races itself.
       assert(
-        await waitFor(async () => (await storedPhotos(oversizedAlbumId)).length === 1, 300),
+        await waitFor(
+          async () =>
+            (await storedPhotos(oversizedAlbumId)).length === 1 &&
+            host.apiCalls.some((entry) => /action=commit/.test(entry.url) && entry.photo),
+          300,
+        ),
         `the photo never landed. requests=${JSON.stringify(host.requests.map((entry) => [entry.url, entry.bytes]))} api=${JSON.stringify(host.apiCalls.map((entry) => [entry.url, entry.bytes]))}`,
       );
       // The file never touched the endpoint the host refuses at this size.
@@ -651,9 +659,13 @@ try {
       ];
       pickFiles(files);
       click(dom, "#view button", "আপলোড করুন");
+      // Both halves have to be observed: the album in the store, and the commit response
+      // this check reads the server's answer out of (recorded a beat after it resolves).
+      const settled = async () =>
+        host.apiCalls.some((entry) => /action=commit/.test(entry.url) && entry.photo) && (await storedPhotos(albumId)).length === 3;
       assert(
-        await waitFor(async () => (await storedPhotos(albumId)).length === 3, 300),
-        `only ${(await storedPhotos(albumId)).length} of 3 photos arrived`,
+        await waitFor(settled, 300),
+        `only ${(await storedPhotos(albumId)).length} of 3 photos arrived (commit recorded: ${host.apiCalls.filter((entry) => /action=commit/.test(entry.url)).map((entry) => Boolean(entry.photo)).join(",") || "none"})`,
       );
       assert(host.forms().length === 1 && host.puts().length === 1, `expected one batch plus one direct write, saw ${host.requests.length} requests`);
       assert(host.forms()[0].files.map((file) => file.name).join() === "first-small.png,second-small.png", "the small photos did not travel together");

@@ -111,6 +111,48 @@ object is not merely private, it has no URL at all.
 The bucket itself needs no change: no policy, setting or existing object is touched, and the
 photo is registered under the same `images/<month>/…` key a form upload would have used.
 
+### Testing an upload without touching the school's data
+
+Preview and Production share one Supabase project, so anything typed on either one is the
+school's real data. Two ways to test the flow anyway, in the order they should be tried:
+
+1. **No account, no network — `npm run test:supabase`.** This drives the real
+   `api/_lib/drivers/supabase.mjs` over real sockets against a throwaway loopback service
+   that answers with Supabase Storage's HTTP contract: the same paths, verbs, response
+   shapes and status codes. It proves everything on this side of the wire — a grant names
+   exactly one key and one use, the browser's PUT needs no session, commit registers the
+   bytes storage actually holds, every failure path empties staging, `/api/media` still
+   enforces publication, a storage outage falls back instead of failing the upload.
+2. **A throwaway Supabase project — the only way to test Supabase's side.** Whether the
+   storage gateway accepts a token-only PUT for a bucket that has no policies, whether the
+   bucket's `file_size_limit` is large enough, and CORS from a real browser cannot be
+   proven by any fake. Steps, all of which leave the school's project untouched:
+
+   1. Supabase → **New project**, e.g. `rahs-cms-test`, its own database password.
+   2. Its SQL Editor → paste `supabase/schema.sql` → **Run**. Every statement is
+      `if not exists` / `on conflict do nothing`, and it only creates the tables and the
+      private `media` bucket. Run it on the **test** project.
+   3. Add **no** storage policies and leave the bucket private — that is what the schema
+      assumes and what `/api/media` relies on.
+   4. Test project → Settings → API → copy its **Project URL** and **`service_role`** key.
+   5. Vercel → project → Settings → Environment Variables → `SUPABASE_URL` and
+      `SUPABASE_SERVICE_ROLE_KEY` with **Environment: Preview only** (Production keeps the
+      school's values; a Preview-scoped variable overrides an `All`-scoped one of the same
+      name). Add `CMS_ALLOW_SETUP=1` there too, for one deploy.
+   6. Redeploy Preview, then open `https://<preview-host>/api/cms/status`: it must answer
+      `driver: "supabase"` with `configProblems: []`. That is the confirmation Preview is
+      talking to the test project and not to the school's.
+   7. Sign in at `/admin/`, create a first account with a password that is **not** the
+      real one, upload the photo that was too big, then remove `CMS_ALLOW_SETUP`.
+   8. Afterwards delete those two Preview-scoped variables (and the project, if you like).
+      Nothing was ever written to the school's database or bucket.
+
+Never run against the school's project: `DROP`/`TRUNCATE`/`ALTER` of any kind, deleting or
+re-creating the bucket, changing its settings, or `CMS_ALLOW_SETUP=1` in Production.
+To check the one number this app cannot see — the bucket's own size limit — open the
+school's project → Storage → `media` → settings and read **File size limit**. That is
+read-only, and `0`/blank means unlimited.
+
 ## 5. After the database goes live: re-check the notice once
 
 The public Notices page still shows the notice written in `notices.html` — it is a static
@@ -167,6 +209,7 @@ npm run test:routes   # 19 checks: every URL is matched by a deployed file + lif
 npm run test:public   # 43 checks: the real pages render CMS content into the approved markup
 npm run test:admin    # 22 checks: the teacher's actual clicks, end to end
 npm run test:storage  # 13 checks: the upload grants and staging rules large photos rely on
+npm run test:supabase # 25 checks: the same flow on the real Supabase driver, over loopback HTTP
 ```
 
 They start a throwaway server against a temporary data folder and fail loudly if any

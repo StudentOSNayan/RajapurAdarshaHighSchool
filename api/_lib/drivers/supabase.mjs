@@ -212,9 +212,13 @@ export const createDriver = async (cfg = config) => {
           throw new HttpError(502, "sign_failed", "স্টোরেজের উত্তর বোঝা যায়নি।");
         }
         // Supabase has answered with a full URL and with a path under /storage/v1
-        // depending on the version, so accept either shape.
+        // depending on the version (and a proxy in between can hand back the path it
+        // received, prefix and all), so accept any of them and land on one absolute URL.
+        // Joining blindly would produce /storage/v1/storage/v1/… — a grant the browser
+        // cannot use, which looks like a failed upload rather than a bad URL.
         const raw = String(payload?.url || payload?.signedURL || payload?.signedUrl || "");
-        const uploadUrl = !raw ? "" : /^https?:\/\//i.test(raw) ? raw : `${base}/storage/v1${raw.startsWith("/") ? "" : "/"}${raw}`;
+        const relative = raw.replace(/^\/storage\/v1(?=\/)/, "");
+        const uploadUrl = !relative ? "" : /^https?:\/\//i.test(relative) ? relative : `${base}/storage/v1${relative.startsWith("/") ? "" : "/"}${relative}`;
         let token = String(payload?.token || "");
         if (!token && uploadUrl) {
           try {

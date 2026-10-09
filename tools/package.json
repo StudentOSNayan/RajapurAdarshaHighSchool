@@ -10,7 +10,8 @@
     "test:admin": "node test-admin-ui.mjs",
     "test:config": "node test-config-validation.mjs",
     "test:routes": "node test-api-routes.mjs",
-    "test:storage": "node test-storage-direct.mjs"
+    "test:storage": "node test-storage-direct.mjs",
+    "test:supabase": "node test-supabase-storage.mjs"
   },
   "devDependencies": {
     "jsdom": "^24.0.0"
