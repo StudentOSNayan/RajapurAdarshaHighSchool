@@ -21,6 +21,12 @@ const MEDIA_DIR = path.join(DATA_DIR, "media");
 
 const EMPTY = { tables: {}, meta: {} };
 
+/* Live staging grants for direct uploads: token → the one path it may write, until it
+ * is used or expires. Development and tests only — on Vercel the local driver is
+ * refused outright (config.assertProductionConfig), and the Supabase driver hands out
+ * real signed URLs instead. */
+const putGrants = new Map();
+
 const matches = (row, condition) => {
   const value = row[condition.col];
   switch (condition.op) {
@@ -215,6 +221,64 @@ export const createDriver = async (cfg = config) => {
         } catch {
           return false;
         }
+      },
+
+      /**
+       * Stands in for Supabase's signed upload URL so the direct-upload flow can be
+       * exercised end to end with no cloud account: the grant is a single-use token
+       * naming exactly one staging path, and the browser's PUT carries the file's bytes
+       * and nothing else. Same shape the Supabase driver returns, so admin.js runs one
+       * code path in development and in production.
+       */
+      async sign(filePath, { ttlSeconds = 2 * 60 * 60 } = {}) {
+        const token = crypto.randomBytes(24).toString("hex");
+        putGrants.set(token, { path: filePath, expiresAt: Date.now() + ttlSeconds * 1000 });
+        return {
+          method: "PUT",
+          upload_url: `/api/cms/photos?action=put&token=${token}`,
+          headers: { "content-type": "application/octet-stream" },
+        };
+      },
+
+      /** The other half of the local grant — writes the bytes that grant was minted for. */
+      async acceptPut(token, buffer) {
+        const grant = putGrants.get(token);
+        putGrants.delete(token); // single use, whether it works or not
+        if (!grant) throw new HttpError(400, "bad_token", "আপলোডের টোকেনটি চেনা যায়নি — আবার চেষ্টা করুন।");
+        if (grant.expiresAt < Date.now()) throw new HttpError(400, "expired_token", "আপলোডের টোকেনের মেয়াদ শেষ হয়ে গেছে — আবার চাপুন।");
+        await this.put(grant.path, buffer, "application/octet-stream");
+        return { path: grant.path };
+      },
+
+      async stat(filePath) {
+        const target = path.join(MEDIA_DIR, filePath);
+        if (!target.startsWith(MEDIA_DIR)) throw new HttpError(400, "bad_path", "ফাইলের পথ গ্রহণযোগ্য নয়।");
+        try {
+          const info = await fs.stat(target);
+          return { bytes: info.size, mtimeMs: info.mtimeMs };
+        } catch {
+          return null;
+        }
+      },
+
+      /** Keys under one prefix with their mtimes — the shape the staging sweep reads. */
+      async list(prefix) {
+        const dir = path.join(MEDIA_DIR, prefix);
+        if (!dir.startsWith(MEDIA_DIR)) return [];
+        const found = [];
+        const walk = async (current, label) => {
+          for (const entry of await fs.readdir(current, { withFileTypes: true }).catch(() => [])) {
+            const childPath = path.join(current, entry.name);
+            const childKey = label ? `${label}/${entry.name}` : entry.name;
+            if (entry.isDirectory()) await walk(childPath, childKey);
+            else {
+              const info = await fs.stat(childPath).catch(() => null);
+              found.push({ path: `${prefix}${childKey}`, mtimeMs: info ? Number(info.mtimeMs) : null });
+            }
+          }
+        };
+        await walk(dir, "");
+        return found;
       },
 
       async remove(filePath) {

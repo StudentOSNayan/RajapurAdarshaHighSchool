@@ -5,7 +5,7 @@
  * bundler, no native module. Node 18+ ships fetch; Vercel runs Node 20+.
  */
 
-import { config } from "../config.mjs";
+import { config, publicStorageKey } from "../config.mjs";
 import { HttpError } from "../http.mjs";
 
 /* Server-only tables and the columns that may leave the driver. Anything not
@@ -180,6 +180,87 @@ export const createDriver = async (cfg = config) => {
           throw new HttpError(502, "upload_failed", "ফাইলটি সংরক্ষণ করা যায়নি। আবার চেষ্টা করুন।");
         }
         return { path };
+      },
+
+      /* A one-path, expiring grant for a browser to PUT into. The token *is* the
+       * credential (Supabase: "Signed upload URLs can be used to upload files to the
+       * bucket without further authentication"), so no service key, bucket policy or
+       * general write permission is given to the client — only the right to create the
+       * one staging object this request just allocated, until it expires. */
+      async sign(path, { contentType = "application/octet-stream" } = {}) {
+        let response;
+        try {
+          response = await fetch(`${base}/storage/v1/object/upload/sign/${cfg.storageBucket}/${path}`, {
+            method: "POST",
+            headers: { ...authHeaders, "Content-Type": "application/json" },
+            body: "{}",
+            cache: "no-store",
+          });
+        } catch (error) {
+          console.error("[cms] storage sign unreachable", error?.cause?.code || error?.message);
+          throw new HttpError(503, "storage_unreachable", "স্টোরেজে পৌঁছানো যাচ্ছে না। একটু পরে আবার চেষ্টা করুন।");
+        }
+        const text = await response.text().catch(() => "");
+        if (!response.ok) {
+          console.error("[cms] storage sign failed", response.status, text.slice(0, 300));
+          throw new HttpError(502, "sign_failed", "স্টোরেজ থেকে আপলোডের অনুমতি পাওয়া যায়নি।");
+        }
+        let payload = null;
+        try {
+          payload = text ? JSON.parse(text) : null;
+        } catch {
+          throw new HttpError(502, "sign_failed", "স্টোরেজের উত্তর বোঝা যায়নি।");
+        }
+        // Supabase has answered with a full URL and with a path under /storage/v1
+        // depending on the version, so accept either shape.
+        const raw = String(payload?.url || payload?.signedURL || payload?.signedUrl || "");
+        const uploadUrl = !raw ? "" : /^https?:\/\//i.test(raw) ? raw : `${base}/storage/v1${raw.startsWith("/") ? "" : "/"}${raw}`;
+        let token = String(payload?.token || "");
+        if (!token && uploadUrl) {
+          try {
+            token = new URL(uploadUrl).searchParams.get("token") || "";
+          } catch {
+            token = "";
+          }
+        }
+        if (!uploadUrl || !token) throw new HttpError(502, "sign_failed", "স্টোরেজ আপলোডের ঠিকানা পাওয়া যায়নি।");
+        const headers = { "content-type": contentType, "x-upsert": "false", "cache-control": "max-age=3600" };
+        // Only when the project's gateway insists every storage request carries a key:
+        // publicStorageKey() returns "" for anything that is not recognisably public.
+        const publicKey = publicStorageKey();
+        if (publicKey) Object.assign(headers, { apikey: publicKey, Authorization: `Bearer ${publicKey}` });
+        return { method: "PUT", upload_url: uploadUrl, headers };
+      },
+
+      /** Size and type as storage recorded them, so an oversized file is refused before
+       *  its bytes are pulled into the function. */
+      async stat(path) {
+        const response = await fetch(`${base}/storage/v1/object/info/${cfg.storageBucket}/${encodeURIComponent(path)}`, {
+          headers: authHeaders,
+          cache: "no-store",
+        }).catch(() => null);
+        if (!response?.ok) return null;
+        const payload = await response.json().catch(() => null);
+        if (!payload) return null;
+        const meta = payload.metadata ?? payload ?? {};
+        const bytes = meta.size ?? payload.size;
+        return {
+          ...(Number.isFinite(Number(bytes)) ? { bytes: Number(bytes) } : {}),
+          ...(meta.mimetype || payload.mimetype ? { mime: meta.mimetype || payload.mimetype } : {}),
+        };
+      },
+
+      /** One directory level under a prefix. Every caller must re-validate each key. */
+      async list(prefix, limit = 200) {
+        const response = await fetch(`${base}/storage/v1/object/list/${cfg.storageBucket}`, {
+          method: "POST",
+          headers: { ...authHeaders, "Content-Type": "application/json" },
+          body: JSON.stringify({ prefix, limit, offset: 0, sortBy: { column: "created_at", order: "asc" } }),
+          cache: "no-store",
+        }).catch(() => null);
+        if (!response?.ok) return [];
+        const payload = await response.json().catch(() => null);
+        return Array.isArray(payload) ? payload : [];
       },
 
       async exists(path) {

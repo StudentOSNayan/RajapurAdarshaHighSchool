@@ -14,7 +14,9 @@ import {
   json,
   noStore,
   parseCookies,
+  readBody,
   readJson,
+  requestOrigin,
   fail,
   notFound,
   HttpError,
@@ -44,7 +46,7 @@ import {
   update,
   updatePhoto,
 } from "./content.mjs";
-import { acceptUpload, deleteMedia, mediaUrl, thumbTransform } from "./media.mjs";
+import { acceptUpload, beginStagedUpload, commitStagedUpload, discardStagedUpload, mediaUrl, sweepStagedUploads, thumbTransform } from "./media.mjs";
 import { bootstrap, changePassword, currentUser, endSession, hashPassword, login, publicUser, requireUser, requireAdminRole } from "./auth.mjs";
 import { parseMultipart } from "./multipart.mjs";
 
@@ -135,7 +137,7 @@ async function handleCmsRoute(req, res, segments, query) {
         setupConfigured: users !== null && users > 0,
         needsSetup: users === 0,
         setupUnlocked: String(process.env.CMS_ALLOW_SETUP || "") === "1",
-        limits: { maxImageMb: Math.round(config.maxImageBytes / 1024 / 1024), maxDocumentMb: Math.round(config.maxDocumentBytes / 1024 / 1024), maxImagesPerUpload: config.maxImagesPerUpload },
+        limits: { maxImageMb: Math.round(config.maxImageBytes / 1024 / 1024), maxDocumentMb: Math.round(config.maxDocumentBytes / 1024 / 1024), maxImagesPerUpload: config.maxImagesPerUpload, directUploads: config.directUploads },
         configProblems: assertProductionConfig(),
       },
     };
@@ -147,6 +149,28 @@ async function handleCmsRoute(req, res, segments, query) {
     const token = parseCookies(req)[config.cookieName];
     if (store && token) await endSession(store, token);
     return { body: { ok: true, loggedOut: true }, headers: { "Set-Cookie": clearCookies(req) } };
+  }
+
+  /* The one request in this API that carries file bytes without a session, and the
+   * only reason it exists is the local driver: it has no signed URLs to hand out, so
+   * this is its stand-in, which lets the whole direct-upload flow be exercised against
+   * the real router (and the real media store) in development and in tests. The Supabase
+   * driver never comes here — the browser PUTs straight to its signed URL.
+   *
+   * Deliberately ahead of requireUser: the grant itself is the credential, exactly like
+   * a Supabase signed URL, so no CMS cookie and no CSRF token ride along. It is confined
+   * to the single staging key it was minted for and to one use. */
+  if (head === "photos" && action === "put" && req.method === "PUT") {
+    if (config.driver !== "local") throw new HttpError(400, "not_supported", "সরাসরি আপলোড শুধু স্থানীয় সার্ভারে এই ঠিকানা দিয়ে চলে — Supabase সরাসরি তার স্বাক্ষরিত ঠিকানায় ফাইল নেয়।");
+    if (req.headers.origin && req.headers.origin !== requestOrigin(req)) {
+      throw forbidden("Cross-site request ব্লক করা হয়েছে।");
+    }
+    const token = String(query.get("token") || "");
+    if (!/^[0-9a-f]{24,64}$/.test(token)) throw new HttpError(400, "bad_token", "আপলোডের টোকেনটি সঠিক নয়।");
+    /* Bounded by the platform's own ceiling rather than the app's 8 MB, so a test can
+     * never pass a request locally that the deployment would have rejected first. */
+    const buffer = await readBody(req, config.maxFormBytes);
+    return { status: 201, body: await (await getStore()).driver.media.acceptPut(token, buffer) };
   }
 
   /* ---- everything below needs a live session ---- *
@@ -171,6 +195,37 @@ async function handleCmsRoute(req, res, segments, query) {
     throw badRequest("এই পদ্ধতিটি এই ঠিকানায় চলে না।");
   }
 
+  /* ---- direct uploads: allocate a staging key, then adopt what landed in it ----
+   * Both calls are tiny JSON, which is the point: a photo bigger than the platform's
+   * request-body ceiling cannot be carried by this function at all, so its bytes travel
+   * browser → storage instead and only the key comes back here. Nothing is registered
+   * until the bytes that actually arrived have been read back and put through the same
+   * sniffing a form upload gets; the staging object is deleted whichever way that goes. */
+  if (head === "photos" && action === "begin" && req.method === "POST") {
+    const payload = await readJson(req);
+    const result = await beginStagedUpload({ name: String(payload?.name ?? ""), size: Number(payload?.size) || 0 });
+    /* Objects a closed tab left behind are cleared before this answer goes out: an
+     * awaited sweep is the difference between "staging is eventually tidy" and a bucket
+     * that quietly fills up. It never fails an upload — a storage listing that throws is
+     * simply a sweep that did nothing this time. */
+    if (result.supported) await sweepStagedUploads(actor.store).catch(() => 0);
+    // 201 only when a staging object really came into being; a polite "this server
+    // cannot do that" is an ordinary 200 the caller falls back from.
+    return result.supported ? { status: 201, body: result } : { body: result };
+  }
+  if (head === "photos" && action === "commit" && req.method === "POST") {
+    const payload = await readJson(req);
+    const albumId = String(payload?.album_id ?? "");
+    if (!/^[0-9a-f-]{36}$/i.test(albumId)) throw badRequest("অ্যালবাম নির্বাচন করা হয়নি।");
+    const record = await commitStagedUpload(String(payload?.staging_key ?? ""), { name: String(payload?.name ?? "") });
+    const photo = await addPhotoRecord(albumId, { ...record, alt: String(payload?.alt ?? "").trim() || null }, actor);
+    return { status: 201, body: { ok: true, photo } };
+  }
+  if (head === "photos" && action === "abort" && req.method === "POST") {
+    const payload = await readJson(req);
+    return { body: { ok: true, removed: await discardStagedUpload(String(payload?.staging_key ?? "")) } };
+  }
+
   /* ---- uploads (multipart) ---- */
   if (head === "upload" && req.method === "POST") {
     const parts = await parseMultipart(req, config.maxFormBytes);
@@ -189,10 +244,12 @@ async function handleCmsRoute(req, res, segments, query) {
     const altText = String(parts.fields.alt_text ?? "").trim() || null;
     const created = [];
     const failures = [];
-    for (const [index, file] of images.entries()) {
+    for (const file of images) {
       try {
         const record = await acceptUpload(file);
-        created.push(await addPhotoRecord(albumId, { ...record, alt: altText, offset: index }, actor));
+        /* No position is passed in: the album's next slot is counted from what is
+         * already stored, so a retry or a second batch cannot collide. */
+        created.push(await addPhotoRecord(albumId, { ...record, alt: altText }, actor));
       } catch (error) {
         if (error instanceof HttpError) failures.push({ name: file.filename, message: error.message });
         else throw error;

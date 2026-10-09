@@ -370,6 +370,147 @@ try {
     return picker;
   };
 
+  /**
+   * The bytes of a real PNG, padded to a chosen size. The direct path finishes at the
+   * server's own validation, so synthetic bytes would be refused for being a non-image
+   * instead of proving what this is about — that a big *photo* now gets through.
+   */
+  const realPhoto = async (name, size, type = "image/png") => {
+    const base = await fs.readFile(path.join(ROOT, "file_000000007e208211b50fdcafeeae9f2e.png"));
+    const bytes = base.length >= size ? base.subarray(0, size) : Buffer.concat([base, Buffer.alloc(size - base.length, 0x5a)]);
+    return new dom.window.File([bytes], name, { type });
+  };
+  const readBytes = (blob) =>
+    new Promise((resolve, reject) => {
+      const reader = new dom.window.FileReader();
+      reader.onload = () => resolve(Buffer.from(reader.result));
+      reader.onerror = () => reject(new Error("the request body could not be read back"));
+      reader.readAsArrayBuffer(blob);
+    });
+
+  /**
+   * Stands in for the *platform*, not for the app. Every request is forwarded to the
+   * real API and the real store, and any request whose body passes the host's 4.5 MB
+   * ceiling is answered the way the host answers it — 413, non-JSON, before the app's
+   * own code runs. So an upload of 5.76 MB that succeeds here has actually avoided
+   * that ceiling rather than been promised its way past it.
+   */
+  const installHost = ({ maxRequestBody = Math.round(4.5 * MB), breakPut = false } = {}) => {
+    const seen = { requests: [], apiCalls: [], inFlight: 0, peak: 0 };
+    const csrf = () => /rahs_csrf=([^;]+)/.exec(dom.window.document.cookie)?.[1] ?? "";
+    const originalFetch = dom.window.fetch;
+    dom.window.fetch = async (input, init = {}) => {
+      const url = String(input);
+      if (/action=(begin|commit|abort)/.test(url)) {
+        const body = typeof init.body === "string" ? init.body : "";
+        const response = await originalFetch(input, init);
+        const entry = { url, method: init.method, bytes: Buffer.byteLength(body), body };
+        if (/action=commit/.test(url)) {
+          // The row the API actually accepted: the album view deliberately omits
+          // bytes/mime, so the response is the only place they can be checked.
+          entry.photo = await response
+            .clone()
+            .json()
+            .then((payload) => payload?.photo ?? null)
+            .catch(() => null);
+        }
+        seen.apiCalls.push(entry);
+        return response;
+      }
+      return originalFetch(input, init);
+    };
+    class FakeXHR {
+      constructor() {
+        this.listeners = {};
+        this.headers = {};
+        this.upload = { addEventListener: () => {} };
+      }
+      open(method, url) {
+        this.method = method;
+        this.url = url;
+      }
+      setRequestHeader(name, value) {
+        this.headers[name] = String(value);
+      }
+      addEventListener(type, fn) {
+        this.listeners[type] = fn;
+      }
+      async send(body) {
+        const isForm = body instanceof dom.window.FormData;
+        const record = { url: this.url, method: this.method, headers: { ...this.headers }, files: [], bytes: 0, form: isForm };
+        seen.requests.push(record);
+        seen.inFlight += 1;
+        seen.peak = Math.max(seen.peak, seen.inFlight);
+        let status = 0;
+        let text = "";
+        try {
+          if (isForm) {
+            const form = new FormData();
+            for (const [key, value] of body.entries()) {
+              if (typeof value === "string") {
+                form.append(key, value);
+                continue;
+              }
+              const bytes = await readBytes(value);
+              record.bytes += bytes.length;
+              record.files.push({ name: value.name, size: value.size, type: value.type, blob: value });
+              form.append(key, new Blob([bytes], { type: value.type || "application/octet-stream" }), value.name);
+            }
+            if (record.bytes > maxRequestBody) {
+              status = 413; // the host's own answer, with no JSON in it
+              text = "FUNCTION_PAYLOAD_TOO_LARGE";
+            } else {
+              const sent = await fetch(`${BASE}${this.url}`, {
+                method: "POST",
+                body: form,
+                headers: { cookie: dom.window.document.cookie, "x-csrf-token": csrf(), origin: BASE },
+              });
+              status = sent.status;
+              text = await sent.text();
+            }
+          } else {
+            const bytes = await readBytes(body);
+            record.bytes = bytes.length;
+            record.files.push({ name: body.name, size: body.size, type: body.type, blob: body });
+            if (breakPut) {
+              status = 0; // the connection died with the file already partly sent
+              text = "";
+            } else {
+              const sent = await fetch(`${BASE}${this.url}`, {
+                method: this.method || "PUT",
+                body: bytes,
+                headers: { "content-type": this.headers["content-type"] || "application/octet-stream" },
+              });
+              status = sent.status;
+              text = await sent.text();
+            }
+          }
+        } catch (error) {
+          status = 0;
+          text = String(error?.message || error);
+        }
+        seen.inFlight -= 1;
+        record.status = status;
+        record.responseText = text;
+        this.status = status;
+        this.responseText = text;
+        this.listeners.load?.();
+      }
+    }
+    dom.window.XMLHttpRequest = FakeXHR;
+    return {
+      requests: seen.requests,
+      apiCalls: seen.apiCalls,
+      peak: () => seen.peak,
+      forms: () => seen.requests.filter((entry) => entry.form),
+      puts: () => seen.requests.filter((entry) => !entry.form),
+      restore: () => {
+        dom.window.XMLHttpRequest = undefined;
+        dom.window.fetch = originalFetch;
+      },
+    };
+  };
+
   await check("eight 1.4 MB photos go out as several requests, none over the safe budget", async () => {
     const albumId = await openPhotoScreen("batching — eight photos");
     const fake = installFakeUploads();
@@ -410,23 +551,58 @@ try {
     }
   });
 
-  await check("a photo larger than the budget travels alone, unchanged", async () => {
-    await openPhotoScreen("batching — one oversized photo");
-    const fake = installFakeUploads();
+  let oversizedAlbumId = "";
+
+  /** What the store actually holds for an album, read over the same API the admin uses. */
+  const storedPhotos = async (albumId) => {
+    const response = await fetch(`${BASE}/api/cms/albums?id=${albumId}`, { headers: { cookie: dom.window.document.cookie, origin: BASE } });
+    return (await response.json())?.item?.photos ?? [];
+  };
+
+  await check("a photo too big for one request is PUT to the grant instead, byte for byte", async () => {
+    oversizedAlbumId = await openPhotoScreen("batching — one 5.76 MB photo");
+    const host = installHost();
     try {
-      const big = photoFile("camera-original.jpg", Math.round(5 * MB));
-      const small = photoFile("phone-shot.jpg", 1 * MB);
-      pickFiles([big, small]);
+      const big = await realPhoto("edited-photo.png", 5_760_000); // what the teacher's edit measured
+      pickFiles([big]);
       click(dom, "#view button", "আপলোড করুন");
-      assert(await waitFor(() => fake.requests.length === 2, 160), `expected 2 requests, saw ${fake.requests.length}`);
-      const first = fake.requests[0];
-      assert(first.files.length === 1 && first.files[0].name === "camera-original.jpg", `the oversized photo shared its request: ${JSON.stringify(first.files.map((f) => f.name))}`);
-      assert(first.files[0].size === big.size, `size changed on the way out: ${first.files[0].size} vs ${big.size}`);
-      assert(first.files[0].type === "image/jpeg", "the declared type changed");
-      assert((await readHead(first.files[0].blob)).startsWith("RAW:camera-original.jpg:"), "the bytes were transformed on the way out");
-      assert(fake.requests[1].files.map((file) => file.name).join() === "phone-shot.jpg", "the second photo was swallowed with the first");
+      assert(
+        await waitFor(async () => (await storedPhotos(oversizedAlbumId)).length === 1, 300),
+        `the photo never landed. requests=${JSON.stringify(host.requests.map((entry) => [entry.url, entry.bytes]))} api=${JSON.stringify(host.apiCalls.map((entry) => [entry.url, entry.bytes]))}`,
+      );
+      // The file never touched the endpoint the host refuses at this size.
+      assert(host.forms().length === 0, `an oversized photo was sent as a form upload (${host.forms().length} requests)`);
+      const puts = host.puts();
+      assert(puts.length === 1, `expected one direct write, saw ${puts.length}`);
+      assert(/action=put/.test(puts[0].url), `the grant pointed somewhere else: ${puts[0].url}`);
+      assert(puts[0].bytes === 5_760_000, `the grant received ${puts[0].bytes} bytes for a 5760000 byte file`);
+      const sent = await readBytes(puts[0].files[0].blob);
+      assert(
+        sent.length === 5_760_000 && sent.subarray(0, 4).toString("hex") === "89504e47" && sent[5_759_999] === 0x5a,
+        "the bytes were transformed on the way out",
+      );
+      assert(puts[0].files[0].name === "edited-photo.png" && puts[0].files[0].type === "image/png", "name or type changed");
+      assert(!puts[0].headers.cookie && !puts[0].headers.authorization && !puts[0].headers["x-csrf-token"], "a session credential was sent to storage");
+      // The API only ever saw a key and a name — nothing that could pass a ceiling.
+      const begin = host.apiCalls.find((entry) => entry.url.includes("action=begin"));
+      const commit = host.apiCalls.find((entry) => entry.url.includes("action=commit"));
+      assert(begin && commit, `begin/commit are missing: ${JSON.stringify(host.apiCalls.map((entry) => entry.url))}`);
+      assert(begin.bytes < 400 && commit.bytes < 400, `the API calls carried ${begin.bytes}/${commit.bytes} bytes`);
+      assert(!host.apiCalls.some((entry) => entry.url.includes("action=abort")), "a completed upload was aborted");
+      const photo = commit.photo;
+      assert(photo && photo.bytes === 5_760_000 && photo.mime === "image/png", `the row the server accepted: ${JSON.stringify(photo)}`);
+      // Dimensions come from the bytes the server read back, never from the client.
+      assert(photo.pixel_width > 0 && photo.pixel_height > 0, `dimensions not sniffed: ${photo.pixel_width}x${photo.pixel_height}`);
+      const [row] = await storedPhotos(oversizedAlbumId);
+      assert(row && row.id === photo.id, `the album does not list the committed photo: ${JSON.stringify(row)}`);
+      assert(String(photo.url).startsWith("/api/media?path=images%2F"), `url not routed through /api/media: ${photo.url}`);
+      // The media route streams, so there is no content-length to trust: read it back.
+      const media = await fetch(`${BASE}${photo.url}`, { headers: { cookie: dom.window.document.cookie, origin: BASE } });
+      const servedBytes = (await media.arrayBuffer()).byteLength;
+      assert(media.status === 200 && servedBytes === 5_760_000, `the stored photo served ${media.status} / ${servedBytes} bytes`);
     } finally {
-      dom.window.XMLHttpRequest = undefined;
+      host.restore();
+      await settle();
     }
   });
 
@@ -449,16 +625,206 @@ try {
     }
   });
 
-  await check("the upload screen states the real per-request limit", async () => {
+  await check("the upload screen states the real limits, for what this server can do", async () => {
     await openPhotoScreen("batching — wording");
     const lines = [...dom.window.document.querySelectorAll("#view p")].map((node) => node.textContent).join(" | ") + hintsOf();
     assert(lines.includes("3.5 MB"), "the batching budget this screen applies is not stated");
     assert(lines.includes("4.5 MB"), "the host's real request ceiling is not stated, so 3.5 MB would look like an invented rule");
-    assert(lines.includes("4.4 MB"), "the screen does not say plainly that one very large file cannot be uploaded at all");
     assert(lines.includes("8 MB"), "the server's own per-file limit stopped being mentioned");
     assert(lines.includes("বাতিল"), "the screen does not say the host refuses an oversized request");
+    // This deployment can issue grants, so the screen must say the big ones go to
+    // storage — and must stop claiming a 5 MB photo is impossible to upload.
+    assert(/সরাসরি স্টোরেজে/.test(lines), "the screen does not mention the direct route large photos now take");
+    assert(!/যে কোনো ভাবেই আপলোড হবে না/.test(lines), "the screen still calls an oversized photo impossible while it can go direct");
     assert(!/বেশি হলে কয়েকবারে দিন/.test(lines), "the screen still tells the teacher to split selections by hand");
     await settle();
+  });
+
+  await check("a mixed selection keeps the order the teacher picked them in", async () => {
+    const albumId = await openPhotoScreen("batching — mixed sizes");
+    const host = installHost();
+    try {
+      const files = [
+        await realPhoto("first-small.png", 300_000),
+        await realPhoto("second-small.png", 400_000),
+        await realPhoto("third-huge.png", 5_760_000),
+      ];
+      pickFiles(files);
+      click(dom, "#view button", "আপলোড করুন");
+      assert(
+        await waitFor(async () => (await storedPhotos(albumId)).length === 3, 300),
+        `only ${(await storedPhotos(albumId)).length} of 3 photos arrived`,
+      );
+      assert(host.forms().length === 1 && host.puts().length === 1, `expected one batch plus one direct write, saw ${host.requests.length} requests`);
+      assert(host.forms()[0].files.map((file) => file.name).join() === "first-small.png,second-small.png", "the small photos did not travel together");
+      assert(host.puts()[0].files[0].name === "third-huge.png", "the oversized photo did not go on its own");
+      assert(host.peak() === 1, `${host.peak()} requests were in flight at once`);
+      const formPhotos = JSON.parse(host.forms()[0].responseText || "{}").photos ?? [];
+      const directPhoto = host.apiCalls.find((entry) => entry.url.includes("action=commit"))?.photo;
+      const created = [...formPhotos, directPhoto].filter(Boolean);
+      assert(created.length === 3, `only ${created.length} of 3 photos were confirmed by the server`);
+      assert(
+        created.map((entry) => entry.bytes).join() === "300000,400000,5760000",
+        `the server recorded sizes in a different order: ${JSON.stringify(created.map((entry) => entry.bytes))}`,
+      );
+      const stored = await storedPhotos(albumId);
+      assert(
+        stored.map((entry) => entry.sort_order).join() === "0,1,2",
+        `the album ended up in order ${JSON.stringify(stored.map((entry) => [entry.sort_order, entry.pixel_width]))}`,
+      );
+    } finally {
+      host.restore();
+      await settle();
+    }
+  });
+
+  await check("a direct write that dies mid-flight is handed back and registers nothing", async () => {
+    const albumId = await openPhotoScreen("batching — interrupted upload");
+    const host = installHost({ breakPut: true });
+    try {
+      pickFiles([await realPhoto("cut-off.png", 5_000_000)]);
+      click(dom, "#view button", "আপলোড করুন");
+      assert(
+        await waitFor(() => /থেমে গেছে|আটকে গেছে/.test(hintsOf()), 200),
+        `the screen never reported the failure: ${hintsOf()}`,
+      );
+      assert((await storedPhotos(albumId)).length === 0, "a photo was registered for bytes that never arrived");
+      const aborted = host.apiCalls.find((entry) => entry.url.includes("action=abort"));
+      assert(aborted, `the unfinished upload was not handed back: ${JSON.stringify(host.apiCalls.map((entry) => entry.url))}`);
+      assert(/staging_key/.test(aborted.body), "the abort did not name the staging object to clear");
+      assert(dom.window.document.getElementById("photoFiles").files.length === 1, "the interrupted selection was thrown away");
+      // And the same selection succeeds once the connection behaves: nothing was half-done.
+      host.restore();
+      const retry = installHost();
+      try {
+        click(dom, "#view button", "আপলোড করুন");
+        assert(
+          await waitFor(async () => (await storedPhotos(albumId)).length === 1, 300),
+          `the retry never landed: ${JSON.stringify(retry.requests.map((entry) => [entry.url, entry.bytes, entry.status]))}`,
+        );
+        assert(retry.puts().length === 1 && retry.forms().length === 0, "the retry did not take the direct route again");
+      } finally {
+        retry.restore();
+      }
+    } finally {
+      host.restore();
+      await settle();
+    }
+  });
+
+  /**
+   * The same deployed admin.js mounted a second time, on a deployment that reports it
+   * cannot issue grants. Whatever the teacher then reads has to match what that server
+   * can really do — no promise of a direct upload it has no way to authorise, and no
+   * photo quietly dropped instead of being reported.
+   */
+  const mountWithoutDirectUploads = async () => {
+    const secondHtml = await (await fetch(`${BASE}/admin/`)).text();
+    const second = new JSDOM(secondHtml, { url: `${BASE}/admin/`, runScripts: "outside-only", pretendToBeVisual: true });
+    const realCall = (input, init = {}) =>
+      fetch(new URL(input, BASE), { ...init, headers: { ...(init.headers || {}), origin: BASE, cookie: second.window.document.cookie } });
+    second.window.fetch = async (input, init = {}) => {
+      const response = await realCall(input, init);
+      for (const value of response.headers.getSetCookie?.() ?? []) {
+        const [pair] = value.split(";");
+        second.window.document.cookie = `${pair}; path=/`;
+      }
+      if (String(input).includes("/api/cms/status")) {
+        const payload = await response.json().catch(() => null);
+        if (payload?.limits) payload.limits.directUploads = false;
+        return new Response(JSON.stringify(payload ?? {}), { status: response.status, headers: { "content-type": "application/json" } });
+      }
+      return response;
+    };
+    second.window.XMLHttpRequest = undefined;
+    second.window.eval(await fs.readFile(path.join(ROOT, "admin/admin.js"), "utf8"));
+    assert(await waitFor(() => !second.window.document.getElementById("gate").hidden, 200), "the second gate never rendered");
+    for (const [selector, value] of [["#loginEmail", "teacher@school.edu"], ["#loginPassword", "bidyalaya-2026"]]) {
+      const node = second.window.document.querySelector(selector);
+      node.value = value;
+      node.dispatchEvent(new second.window.Event("input", { bubbles: true }));
+    }
+    second.window.document
+      .querySelector("#loginForm button[type=submit]")
+      .dispatchEvent(new second.window.MouseEvent("click", { bubbles: true, cancelable: true }));
+    assert(
+      await waitFor(() => second.window.document.querySelector("#view h1")?.textContent.includes("ড্যাশবোর্ড"), 200),
+      "the second session never opened the dashboard",
+    );
+    return second;
+  };
+
+  await check("without grants the screen drops its promises and loses nothing silently", async () => {
+    const second = await mountWithoutDirectUploads();
+    second.window.location.hash = `#/albums/${oversizedAlbumId}/photos`;
+    second.window.dispatchEvent(new second.window.Event("hashchange"));
+    assert(await waitFor(() => second.window.document.getElementById("photoFiles"), 200), "the photo screen never opened in the second session");
+    await settle();
+    const copy = [...second.window.document.querySelectorAll("#view p, #view .hint")].map((node) => node.textContent.trim()).join(" | ");
+    assert(copy.includes("3.5 MB") && copy.includes("4.5 MB") && copy.includes("8 MB"), `limits missing from the fallback wording: ${copy}`);
+    assert(/আপলোড হবে না/.test(copy) && copy.includes("4.4 MB"), "the fallback screen should still say a too-large file cannot be uploaded here");
+    assert(!/সরাসরি স্টোরেজে/.test(copy), "the fallback screen promised a direct upload this server cannot authorise");
+
+    const seen = [];
+    const apiSeen = [];
+    const original = second.window.fetch;
+    second.window.fetch = async (input, init = {}) => {
+      if (/action=(begin|commit)/.test(String(input))) apiSeen.push(String(input));
+      return original(input, init);
+    };
+    class Recorder {
+      constructor() {
+        this.listeners = {};
+        this.headers = {};
+        this.upload = { addEventListener: () => {} };
+      }
+      open(method, url) {
+        this.method = method;
+        this.url = url;
+      }
+      setRequestHeader() {}
+      addEventListener(type, fn) {
+        this.listeners[type] = fn;
+      }
+      send(body) {
+        const files = [];
+        let bytes = 0;
+        for (const [key, value] of body.entries()) {
+          if (typeof value !== "string") {
+            files.push({ name: value.name, size: value.size });
+            bytes += value.size;
+          }
+        }
+        seen.push({ url: this.url, files, bytes });
+        setTimeout(() => {
+          this.status = 413; // the host, as it really answers at this size
+          this.responseText = "FUNCTION_PAYLOAD_TOO_LARGE";
+          this.listeners.load?.();
+        }, 2);
+      }
+    }
+    second.window.XMLHttpRequest = Recorder;
+    try {
+      const picker2 = second.window.document.getElementById("photoFiles");
+      Object.defineProperty(picker2, "files", { value: [await realPhoto("on-a-server-without-grants.png", 5_760_000)], configurable: true, writable: false });
+      picker2.dispatchEvent(new second.window.Event("change", { bubbles: true }));
+      const uploadButton = [...second.window.document.querySelectorAll("#view button")].find((node) => node.textContent.includes("আপলোড করুন"));
+      assert(uploadButton, "the second screen has no upload button to click");
+      uploadButton.dispatchEvent(new second.window.MouseEvent("click", { bubbles: true, cancelable: true }));
+      for (let attempt = 0; attempt < 200 && !/থেমে গেছে/.test([...second.window.document.querySelectorAll("#view .hint")].map((node) => node.textContent).join(" | ")); attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      const reported = [...second.window.document.querySelectorAll("#view .hint")].map((node) => node.textContent).join(" | ");
+      assert(/থেমে গেছে/.test(reported), `the refusal was never reported: ${reported}`);
+      assert(/HTTP 413/.test(reported), `the message hid which layer refused it: ${reported}`);
+      assert(seen.length === 1 && /action=upload/.test(seen[0].url), `the oversized photo went somewhere unexpected: ${JSON.stringify(seen.map((entry) => entry.url))}`);
+      assert(apiSeen.length === 0, `a server that cannot grant was asked for one: ${JSON.stringify(apiSeen)}`);
+      assert(picker2.files.length === 1, "the failed selection was thrown away");
+    } finally {
+      second.window.XMLHttpRequest = undefined;
+      second.window.fetch = original;
+      await new Promise((resolve) => setTimeout(resolve, 120));
+    }
   });
 
   await check("account screen changes a password", async () => {

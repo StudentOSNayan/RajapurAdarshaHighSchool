@@ -104,6 +104,20 @@ export const describeSupabaseKey = (raw) => {
   };
 };
 
+/**
+ * The only storage key this server will ever hand to a browser, and only when the
+ * project actually needs one on a PUT (see config.storagePublicKey). A value that
+ * looks like a *secret* — a JWT whose role is not `anon`, or an `sb_secret_` /
+ * `sb_admin_` key — is dropped here rather than shipped to a client.
+ */
+export const publicStorageKey = () => {
+  const key = config.storagePublicKey;
+  if (!key) return "";
+  const role = keyRole(key);
+  if (role) return role === "anon" ? key : "";
+  return /^sb_(publishable|anon|public)/i.test(key) ? key : "";
+};
+
 export const config = {
   /**
    * "supabase" -> Postgres (via PostgREST) + Storage buckets. Production.
@@ -135,11 +149,36 @@ export const config = {
   /** Upload limits (enforced server-side, before a byte is stored). */
   maxImageBytes: int(env.CMS_MAX_IMAGE_BYTES, 8 * 1024 * 1024),
   maxDocumentBytes: int(env.CMS_MAX_DOCUMENT_BYTES, 5 * 1024 * 1024),
-  /* A Vercel Hobby function has a 10s wall clock, so one request is capped well
-   * below "as much as the browser will send": batch uploads and the message below
-   * tell the teacher to send the rest in a second go. */
+  /* One request carries a bounded number of files: every photo is re-read, re-checked
+   * and written to storage inside the same request, and the whole body has to fit the
+   * host's 4.5 MB request ceiling (see directUploads below, and Vercel's Functions
+   * limits, which cannot be raised from code or vercel.json). */
   maxImagesPerUpload: int(env.CMS_MAX_IMAGES_PER_UPLOAD, 6),
   maxFormBytes: int(env.CMS_MAX_FORM_BYTES, 24 * 1024 * 1024),
+
+  /**
+   * Direct-to-storage uploads. A Vercel function accepts at most 4.5 MB in a request
+   * body (and in a response body) — a ceiling *below* maxImageBytes, and not
+   * configurable in code or in vercel.json. So a photo larger than that can never
+   * travel through this API at all. When direct uploads are on, the browser asks this
+   * API for a short-lived, single-path upload grant, PUTs the file straight into the
+   * storage bucket, and only then asks the API to verify and register it — the file's
+   * bytes never pass through a function. Turn it off (CMS_DIRECT_UPLOADS=0) and every
+   * upload falls back to the multipart form path exactly as before.
+   */
+  directUploads: flag(env.CMS_DIRECT_UPLOADS, true),
+
+  /** How long an abandoned staging object survives before a sweep removes it. */
+  stagingMaxAgeHours: int(env.CMS_STAGING_MAX_AGE_HOURS, 6),
+
+  /**
+   * Optional. Supabase's signed upload URL is itself the credential, so no key is
+   * needed on the PUT. Some projects sit behind a gateway that insists every storage
+   * request carries a *public* key; if that is the case, set this to the project's
+   * publishable/anon key. publicStorageKey() refuses to hand over anything that does
+   * not look public, so a mis-pasted service credential can never reach a browser.
+   */
+  storagePublicKey: normalizeKey(env.CMS_STORAGE_PUBLIC_KEY || ""),
 
   /** Session lifetime. Sliding: each authenticated request extends it. */
   sessionHours: int(env.CMS_SESSION_HOURS, 12),

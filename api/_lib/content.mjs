@@ -310,8 +310,13 @@ export async function addPhotoRecord(albumId, record, actor) {
   await store.byId("albums", albumId);
   const siblings = await store.rawList("photos", {
     where: [{ col: "album_id", op: "eq", value: albumId }, { col: "deleted_at", op: "is", value: null }],
-    select: ["id"],
+    select: ["id", "sort_order"],
   });
+  /* The album's own next slot, counted from what is already stored. Counting
+   * `siblings.length + offset` instead (as this did) double-counts as soon as more than
+   * one photo is added in sequence, so two photos end up sharing a sort_order — which
+   * the gallery renders as a swapped pair. A client never dictates position from here. */
+  const nextOrder = siblings.reduce((highest, row) => Math.max(highest, Number.isFinite(row.sort_order) ? row.sort_order : -1), -1) + 1;
   const created = await store.insert("photos", {
     album_id: albumId,
     file_path: record.path,
@@ -321,7 +326,7 @@ export async function addPhotoRecord(albumId, record, actor) {
     mime: record.mime ?? null,
     pixel_width: record.width ?? null,
     pixel_height: record.height ?? null,
-    sort_order: siblings.length + (record.offset ?? 0),
+    sort_order: nextOrder,
     created_by: actor.user.id,
   });
   const albums = await store.byId("albums", albumId);

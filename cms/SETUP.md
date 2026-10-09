@@ -83,10 +83,33 @@ All have sensible defaults and none are needed for a first launch:
 | `CMS_THUMB_WIDTH` / `_HEIGHT` / `_QUALITY` | `800` / `600` / `72` | Thumbnail render size |
 | `CMS_MAX_IMAGE_BYTES` | `8388608` (8 MB) | Rejected before a byte is stored |
 | `CMS_MAX_DOCUMENT_BYTES` | `5242880` (5 MB) | PDF/doc limit |
-| `CMS_MAX_IMAGES_PER_UPLOAD` | `6` | Per upload — Vercel Hobby functions stop at 10 s |
+| `CMS_MAX_IMAGES_PER_UPLOAD` | `6` | Photos per form request (all validated and stored inside that one call) |
+| `CMS_DIRECT_UPLOADS` | `1` | Large photos are PUT straight to storage; `0` forces every upload through the API |
+| `CMS_STORAGE_PUBLIC_KEY` | empty | Only if the project's gateway demands a key on a storage PUT — publishable/anon key, never a secret |
+| `CMS_STAGING_MAX_AGE_HOURS` | `6` | How long an abandoned, never-registered upload is kept before a sweep clears it |
 | `CMS_SESSION_HOURS` | `12` | Sliding session lifetime |
 | `CMS_LOGIN_MAX_FAILS` / `CMS_LOGIN_WINDOW_MINUTES` | `8` / `15` | Per-IP+email lockout |
 | `CMS_PUBLIC_CACHE_SECONDS` | `60` | CDN cache for `/api/public/*` |
+
+### Why a large photo does not travel through the API
+
+Vercel refuses any function request body over **4.5 MB** — `413 FUNCTION_PAYLOAD_TOO_LARGE`,
+returned by the platform before `api/cms/[...path].mjs` runs, and not adjustable in code or
+`vercel.json`. That sits *below* this app's own 8 MB per-photo limit, which is why an edited
+5.76 MB picture failed with a bare HTTP 413 while an ordinary phone photo worked: nothing in
+the school's code was involved, and no error message of ours could have been shown.
+
+The admin therefore splits a selection. Photos that fit travel together, in batches of at most
+3.5 MB per request, so the multipart framing stays under the ceiling. A photo too big for one
+request is instead PUT to a staging key this API minted (`images/incoming/<month>/<uuid>`, via
+a single-use signed upload URL), and only then read back, validated from its own bytes and
+registered. Nothing is in the album until that last step, and the staging object is deleted
+whichever way the check goes — a half-finished upload is left behind neither in the database
+nor in the bucket. A staging key is also outside the pattern `/api/media` serves, so such an
+object is not merely private, it has no URL at all.
+
+The bucket itself needs no change: no policy, setting or existing object is touched, and the
+photo is registered under the same `images/<month>/…` key a form upload would have used.
 
 ## 5. After the database goes live: re-check the notice once
 
@@ -138,11 +161,12 @@ just its segment count — counting alone was fooled twice, once by `/api/media`
 
 ```bash
 cd tools
-npm test             # 57 API + security + dashboard checks (no npm packages needed)
-npm run test:config  # 16 checks: service-role key validation + drivers vs schema.sql
-npm run test:routes  # 18 checks: every URL is matched by a deployed file + lifecycles
-npm run test:public  # 18 checks: the real pages render CMS content into the approved markup
-npm run test:admin   # 14 checks: the teacher's actual clicks, end to end
+npm test              # 87 API + security + dashboard checks (no npm packages needed)
+npm run test:config   # 16 checks: service-role key validation + drivers vs schema.sql
+npm run test:routes   # 19 checks: every URL is matched by a deployed file + lifecycles
+npm run test:public   # 43 checks: the real pages render CMS content into the approved markup
+npm run test:admin    # 22 checks: the teacher's actual clicks, end to end
+npm run test:storage  # 13 checks: the upload grants and staging rules large photos rely on
 ```
 
 They start a throwaway server against a temporary data folder and fail loudly if any

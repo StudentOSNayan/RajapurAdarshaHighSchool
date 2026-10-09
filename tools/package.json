@@ -9,7 +9,8 @@
     "test:public": "node test-public-render.mjs",
     "test:admin": "node test-admin-ui.mjs",
     "test:config": "node test-config-validation.mjs",
-    "test:routes": "node test-api-routes.mjs"
+    "test:routes": "node test-api-routes.mjs",
+    "test:storage": "node test-storage-direct.mjs"
   },
   "devDependencies": {
     "jsdom": "^24.0.0"

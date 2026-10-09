@@ -118,9 +118,44 @@ const uploadFiles = (path, formData, onProgress) =>
       if (xhr.status >= 200 && xhr.status < 300) resolve(payload);
       else reject(new ApiError(payload?.message || `আপলোড ব্যর্থ (HTTP ${xhr.status})`, xhr.status, payload?.fields));
     });
-    xhr.addEventListener("error", () => reject(new ApiError("আপলোড আটকে গেছে — সংযোগ পরীক্ষা করুন।", 0)));
-    xhr.addEventListener("abort", () => reject(new ApiError("আপলোড বাতিল করা হয়েছে।", 0)));
-    xhr.send(formData);
+  xhr.addEventListener("error", () => reject(new ApiError("আপলোড আটকে গেছে — সংযোগ পরীক্ষা করুন।", 0)));
+  xhr.addEventListener("abort", () => reject(new ApiError("আপলোড বাতিল করা হয়েছে।", 0)));
+  xhr.send(formData);
+  });
+
+/**
+ * PUTs one file into the storage object the server just allocated for it.
+ *
+ * Deliberately sent without the session: no cookie, no CSRF header, `withCredentials`
+ * left false. The capability is the single-use token inside the grant URL, and it
+ * permits exactly one write to one new key — nothing else in the bucket, nothing that
+ * already exists. The bytes go out untouched, the same as on the form path.
+ */
+const putToStorage = (grant, file, onProgress) =>
+  new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open(grant.method || "PUT", grant.upload_url);
+    for (const [name, value] of Object.entries(grant.headers ?? {})) {
+      try {
+        xhr.setRequestHeader(name, String(value));
+      } catch {
+        /* a header this runtime owns (content-length and friends) — storage does not need it */
+      }
+    }
+    xhr.upload.addEventListener("progress", (event) => {
+      if (onProgress && event.lengthComputable) onProgress(Math.round((event.loaded / event.total) * 100));
+    });
+    xhr.addEventListener("load", () => {
+      if (xhr.status >= 200 && xhr.status < 300) return resolve(true);
+      /* A bucket can refuse a file for its own reason (its configured size limit, for
+       * instance) and say so in its response — quoting that status verbatim is the only
+       * way a teacher learns the storage refused rather than this app. */
+      const detail = String(xhr.responseText || "").replace(/\s+/g, " ").trim().slice(0, 160);
+      reject(new ApiError(`স্টোরেজ ছবিটি নেয়নি (HTTP ${xhr.status}${detail ? ` · ${detail}` : ""})`, xhr.status));
+    });
+    xhr.addEventListener("error", () => reject(new ApiError("স্টোরেজে ছবিটি পাঠানো যায়নি — সংযোগ পরীক্ষা করুন।", 0)));
+    xhr.addEventListener("abort", () => reject(new ApiError("স্টোরেজে ছবিটি পাঠানো বাতিল হয়েছে।", 0)));
+    xhr.send(file);
   });
 
 /* A Vercel function refuses any request whose body passes 4.5 MB — a ceiling *below*
@@ -142,6 +177,7 @@ const UPLOAD_HOST_LIMIT_MB = 4.5; // Vercel's own ceiling, and it is not configu
 const UPLOAD_FILE_LIMIT_MB = 4.4; // a single file above this cannot pass that ceiling in any arrangement
 const UPLOAD_REQUEST_BUDGET_MB = 3.5; // what this screen aims for, leaving the host some room
 const UPLOAD_REQUEST_BUDGET_BYTES = Math.round(UPLOAD_REQUEST_BUDGET_MB * 1024 * 1024);
+const UPLOAD_FILE_LIMIT_BYTES = Math.round(UPLOAD_FILE_LIMIT_MB * 1024 * 1024);
 
 /** Groups files into requests of at most maxBytes and at most maxFiles files. */
 const planUploadBatches = (files, { maxBytes = UPLOAD_REQUEST_BUDGET_BYTES, maxFiles = 6 } = {}) => {
@@ -162,6 +198,72 @@ const planUploadBatches = (files, { maxBytes = UPLOAD_REQUEST_BUDGET_BYTES, maxF
   if (batch.length) batches.push(batch);
   return batches;
 };
+
+/**
+ * A file too big for the form budget still has a way in: this screen asks the API for a
+ * short-lived grant that points at one brand-new object in the bucket and PUTs the bytes
+ * there, then asks the API to verify and register what arrived. Only that tiny JSON
+ * handshake passes through a function. `DirectUnavailable` is how the server says it
+ * cannot issue grants — not an error to show, a reason to use the form path.
+ */
+class DirectUnavailable extends Error {
+  constructor(reason) {
+    super(reason || "সরাসরি আপলোড এই সার্ভারে চালু নেই।");
+    this.name = "DirectUnavailable";
+  }
+}
+
+/** Whether this deployment can hand out storage grants (unknown until /status replies). */
+const directUploadsEnabled = () => state.limits?.directUploads !== false;
+
+/**
+ * Turns one selection into the ordered list of requests that will carry it: consecutive
+ * small photos share a multipart request, anything larger is PUT to storage alone.
+ * The teacher's picking order is kept, so the album ends up in that order too. A file
+ * is never resized, re-encoded, split or skipped — it only changes which door it uses.
+ */
+const planUploadSteps = (files, { maxBytes = UPLOAD_REQUEST_BUDGET_BYTES, maxFiles = 6, direct = false } = {}) => {
+  const steps = [];
+  let batch = [];
+  let bytes = 0;
+  const flush = () => {
+    if (batch.length) steps.push({ kind: "form", batch });
+    batch = [];
+    bytes = 0;
+  };
+  for (const file of files || []) {
+    const size = Number(file?.size) || 0;
+    if (direct && size > maxBytes) {
+      flush();
+      steps.push({ kind: "direct", file });
+      continue;
+    }
+    if (batch.length && (bytes + size > maxBytes || batch.length >= maxFiles)) flush();
+    batch.push(file);
+    bytes += size;
+  }
+  flush();
+  return steps;
+};
+
+const uploadBytes = (file) => `${(Number(file?.size || 0) / (1024 * 1024)).toFixed(1)} MB`;
+
+/* The limits a teacher is told about have to be the limits of the server this screen is
+ * actually talking to — promising that a large photo will get through is only honest
+ * when that server can issue the storage grant that makes it possible. */
+const photoLimitHint = () => {
+  const shared =
+    `সমর্থিত: JPEG, PNG, WebP। সার্ভার প্রতিটি ছবিতে সর্বোচ্চ ${state.limits?.maxImageMb ?? 8} MB চল দেয়, কিন্তু হোস্ট ${UPLOAD_HOST_LIMIT_MB} MB-এর বড় অনুরোধ বাতিল করে — তাই ছবিগুলো ${UPLOAD_REQUEST_BUDGET_MB} MB-এর ছোট ছোট অনুরোধে ভাগ হয়ে যায়।`;
+  return directUploadsEnabled()
+    ? shared +
+        ` যে ছবি ${UPLOAD_REQUEST_BUDGET_MB} MB-এরও বড়, সেটি ফর্মের অনুরোধে না গিয়ে সরাসরি স্টোরেজে আপলোড হয় — তাই বড় ছবিও এখন ওঠে। সার্ভার আসল বাইট দেখেই সীমা মাপে, তাই ${UPLOAD_FILE_LIMIT_MB} MB-এর নিচে রাখলে সবচেয়ে সহজ।`
+    : shared + ` একটি ছবি ${UPLOAD_FILE_LIMIT_MB} MB-এরও বড় হলে সেটি যে কোনো ভাবেই আপলোড হবে না — আগে ছোট (২০০০ পিক্সেলের নিচে) করে নিন।`;
+};
+
+const photoStatusHint = (count) =>
+  `এই অ্যালবামে ${count}টি ছবি। একসাথে যত খুশি বেছে নিন — প্রতিটি অনুরোধ ${UPLOAD_REQUEST_BUDGET_MB} MB-এর বেশি হবে না${
+    directUploadsEnabled() ? ", বড় ছবিগুলো সরাসরি স্টোরেজে যায়" : ""
+  }।`;
 
 const confirmAction = ({ title, body, word = null, danger = true, yesLabel = "হ্যাঁ, করুন" }) =>
   new Promise((resolve) => {
@@ -372,7 +474,12 @@ const renderDashboard = async () => {
         : h("p", { class: "row-body", text: "এখনো কোনো কার্যক্রম নেই।" }),
     ]),
 
-    h("div", { class: "notice-line" }, `সংরক্ষণ ব্যবস্থা: ${data.storage.driver === "supabase" ? "Supabase (প্রোডাকশন)" : "লোকাল ডেভ (শুধু পরীক্ষার জন্য)"} · সর্বোচ্চ ছবি ${Math.round(data.storage?.limits?.maxImageMb ?? state.limits?.maxImageMb ?? 8)} MB · একটি অনুরোধে হোস্ট ${UPLOAD_HOST_LIMIT_MB} MB পর্যন্ত চলে, তাই ছবি ${UPLOAD_REQUEST_BUDGET_MB} MB-এর অনুরোধে ভাগ হয়ে পাঠানো হয়`),
+    h("div", {
+      class: "notice-line",
+      text:
+        `সংরক্ষণ ব্যবস্থা: ${data.storage.driver === "supabase" ? "Supabase (প্রোডাকশন)" : "লোকাল ডেভ (শুধু পরীক্ষার জন্য)"} · সর্বোচ্চ ছবি ${Math.round(data.storage?.limits?.maxImageMb ?? state.limits?.maxImageMb ?? 8)} MB · একটি অনুরোধে হোস্ট ${UPLOAD_HOST_LIMIT_MB} MB পর্যন্ত চলে, তাই ছবি ${UPLOAD_REQUEST_BUDGET_MB} MB-এর অনুরোধে ভাগ হয়ে পাঠানো হয়` +
+        (data.storage?.limits?.directUploads === false ? " · বড় ছবি সরাসরি স্টোরেজে পাঠানো এই সার্ভারে চালু নেই" : " · যে ছবি এই সীমারও বড়, সেটি সরাসরি স্টোরেজে পাঠানো হয়"),
+    }),
   );
   view.focus();
 };
@@ -797,29 +904,86 @@ const renderAlbum = async (resource, id) => {
   const picker = h("input", { id: "photoFiles", type: "file", accept: "image/jpeg,image/png,image/webp", multiple: true });
   const altDefault = h("input", { type: "text", placeholder: "বর্ণনা (alt) — সব ছবির জন্য (প্রযোজ্য হলে)", "aria-label": "ছবির বর্ণনা" });
   const bar = h("div", { class: "bar", hidden: true }, h("i", { style: "width:0%" }));
-  const statusLine = h("p", { class: "hint", text: `এই অ্যালবামে ${photos.length}টি ছবি। একসাথে যত খুশি বেছে নিন — প্রতিটি অনুরোধ ${UPLOAD_REQUEST_BUDGET_MB} MB-এর বেশি হবে না।` });
+  const statusLine = h("p", { class: "hint", text: photoStatusHint(photos.length) });
 
   const doUpload = async () => {
     const files = [...(picker.files ?? [])];
     if (!files.length) return;
-    const batches = planUploadBatches(files, { maxFiles: state.limits?.maxImagesPerUpload ?? 6 });
+    const maxFiles = state.limits?.maxImagesPerUpload ?? 6;
+    /* Whether a photo too big for a form request may go straight to storage is the
+     * server's call, because it is the one that has to read the bytes back. If this
+     * deployment cannot issue grants, the whole selection travels the form path exactly
+     * as it did before. */
+    let direct = directUploadsEnabled();
+    let steps = planUploadSteps(files, { maxFiles, direct });
+    const filesIn = (from) => steps.slice(from).flatMap((step) => (step.kind === "direct" ? [step.file] : step.batch));
     bar.hidden = false;
     bar.firstChild.style.width = "0%";
     let sent = 0;
     const added = [];
     const failed = [];
+
+    const sendForm = async (batch, label) => {
+      statusLine.textContent = `আপলোড হচ্ছে… ${label} · ছবি ${sent + 1}–${sent + batch.length}/${files.length}`;
+      const data = new FormData();
+      data.set("album_id", id);
+      if (altDefault.value.trim()) data.set("alt_text", altDefault.value.trim());
+      batch.forEach((file) => data.append("files", file, file.name));
+      const payload = await uploadFiles(`/api/cms/photos?action=upload`, data, (percent) => (bar.firstChild.style.width = `${percent}%`));
+      added.push(...(payload.photos ?? []));
+      failed.push(...(payload.failed ?? []));
+    };
+
+    /* Allocate a staging key, PUT the bytes to it, then let the server read them back,
+     * validate them and register the photo. The photo is in the album only after that
+     * last step, so an interrupted transfer cannot leave a half-file attached to
+     * anything, and a rejected one is deleted from staging on the way out. */
+    const sendDirect = async (file, label) => {
+      statusLine.textContent = `সরাসরি স্টোরেজে পাঠানো হচ্ছে… ${label} · ${file.name} (${uploadBytes(file)})`;
+      const grant = await api("/photos?action=begin", { method: "POST", silent: true, body: { name: file.name, size: Number(file.size) || 0 } });
+      if (!grant?.supported || !grant.staging_key) throw new DirectUnavailable(grant?.reason);
+      let staging = grant.staging_key;
+      try {
+        await putToStorage(grant, file, (percent) => (bar.firstChild.style.width = `${Math.min(percent, 95)}%`));
+        const alt = altDefault.value.trim();
+        const payload = await api("/photos?action=commit", {
+          method: "POST",
+          silent: true,
+          body: { album_id: id, staging_key: staging, name: file.name, ...(alt ? { alt } : {}) },
+        });
+        if (!payload?.photo) throw new ApiError("ছবিটি যোগ হয়েছে বলে নিশ্চিত করা যায়নি — আবার চাপুন।", 0);
+        bar.firstChild.style.width = "100%";
+        added.push(payload.photo);
+        staging = null; // verified and registered; the server already emptied staging
+      } finally {
+        if (staging) await api("/photos?action=abort", { method: "POST", silent: true, body: { staging_key: staging } }).catch(() => null);
+      }
+    };
+
     try {
-      for (const [index, batch] of batches.entries()) {
-        statusLine.textContent = `আপলোড হচ্ছে… অনুরোধ ${index + 1}/${batches.length} · ছবি ${sent + 1}–${sent + batch.length}/${files.length}`;
-        const data = new FormData();
-        data.set("album_id", id);
-        if (altDefault.value.trim()) data.set("alt_text", altDefault.value.trim());
-        batch.forEach((file) => data.append("files", file, file.name));
+      let index = 0;
+      while (index < steps.length) {
+        const step = steps[index];
+        const label = `অনুরোধ ${index + 1}/${steps.length}`;
         try {
-          const payload = await uploadFiles(`/api/cms/photos?action=upload`, data, (percent) => (bar.firstChild.style.width = `${percent}%`));
-          added.push(...(payload.photos ?? []));
-          failed.push(...(payload.failed ?? []));
+          if (step.kind === "direct") await sendDirect(step.file, label);
+          else await sendForm(step.batch, label);
         } catch (failure) {
+          if (failure instanceof DirectUnavailable) {
+            /* Storage said no — that is not the teacher's upload failing. This file and
+             * the ones behind it go back on the form path; only a photo the host will
+             * not carry in any arrangement is reported instead of fired at a wall. */
+            direct = false;
+            const remaining = filesIn(index);
+            const carryable = [];
+            for (const file of remaining) {
+              if (file.size > UPLOAD_FILE_LIMIT_BYTES) failed.push({ name: file.name, message: `${uploadBytes(file)} ছবিটি হোস্টের ${UPLOAD_HOST_LIMIT_MB} MB সীমার বাইরে, এবং এই সার্ভারে সরাসরি আপলোড চালু নেই — আগে ছোট (২০০০ পিক্সেলের নিচে) করে নিন।` });
+              else carryable.push(file);
+            }
+            steps = [...steps.slice(0, index), ...planUploadSteps(carryable, { maxFiles, direct: false })];
+            if (index >= steps.length) break;
+            continue;
+          }
           /* A whole request refused by the host stores nothing, so the rest of the
            * selection is left on screen for a retry instead of being fired at the same
            * wall one after another. */
@@ -827,7 +991,8 @@ const renderAlbum = async (resource, id) => {
           toast(failure.message, "danger");
           return;
         }
-        sent += batch.length;
+        sent += step.kind === "direct" ? 1 : step.batch.length;
+        index += 1;
       }
       toast(
         failed.length
@@ -835,6 +1000,7 @@ const renderAlbum = async (resource, id) => {
           : `${added.length}টি ছবি যোগ হয়েছে।`,
         failed.length ? "danger" : "ok",
       );
+      if (!added.length && failed.length) statusLine.textContent = `কোনো ছবি যোগ হয়নি — ${failed[0].message}`;
       picker.value = "";
       route();
     } finally {
@@ -930,12 +1096,7 @@ const renderAlbum = async (resource, id) => {
           h("label", { for: "photoFiles", text: "ছবি বেছে নিন (একাধিক)" }),
           picker,
           altDefault,
-          h("p", {
-            text:
-              "সমর্থিত: JPEG, PNG, WebP। সার্ভার প্রতিটি ছবিতে সর্বোচ্চ " + (state.limits?.maxImageMb ?? 8) + " MB চল দেয়, কিন্তু হোস্ট " +
-              UPLOAD_HOST_LIMIT_MB + " MB-এর বড় অনুরোধ বাতিল করে — তাই ছবিগুলো " + UPLOAD_REQUEST_BUDGET_MB + " MB-এর ছোট ছোট অনুরোধে ভাগ হয়ে যায়। " +
-              "একটি ছবি " + UPLOAD_FILE_LIMIT_MB + " MB-এরও বড় হলে সেটি যে কোনো ভাবেই আপলোড হবে না — আগে ছোট (২০০০ পিক্সেলের নিচে) করে নিন।",
-          }),
+          h("p", { text: photoLimitHint() }),
           h("div", { class: "view-actions" }, [
             h("button", { class: "btn", type: "button", onclick: doUpload }, "আপলোড করুন"),
             h("button", { class: "btn btn-quiet", type: "button", onclick: () => { picker.value = ""; statusLine.textContent = "নির্বাচন বাতিল।"; } }, "নির্বাচন বাতিল"),

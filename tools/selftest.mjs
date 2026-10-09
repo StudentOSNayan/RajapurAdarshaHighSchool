@@ -41,18 +41,21 @@ const assert = (condition, message) => {
   if (!condition) throw new Error(message);
 };
 
-const call = async (pathname, { method = "GET", body, headers = {}, raw = false } = {}) => {
+const call = async (pathname, { method = "GET", body, bodyRaw, headers = {}, raw = false } = {}) => {
   const isForm = body instanceof FormData;
+  // bodyRaw is for a direct-to-storage PUT: the file's own bytes as the whole body,
+  // which is exactly what a signed upload URL receives.
+  const sendBody = bodyRaw !== undefined ? bodyRaw : body === undefined ? undefined : isForm ? body : JSON.stringify(body);
   const response = await fetch(`${BASE}${pathname}`, {
     method,
     headers: {
       ...(jar.size ? { cookie: cookieHeader() } : {}),
       ...(jar.get("rahs_csrf") && ["POST", "PATCH", "DELETE"].includes(method) ? { "x-csrf-token": jar.get("rahs_csrf") } : {}),
-      ...(isForm ? {} : body ? { "content-type": "application/json" } : {}),
+      ...(isForm || bodyRaw !== undefined ? {} : body ? { "content-type": "application/json" } : {}),
       origin: BASE,
       ...headers,
     },
-    ...(body ? { body: isForm ? body : JSON.stringify(body) } : {}),
+    ...(sendBody === undefined ? {} : { body: sendBody }),
   });
   for (const value of response.headers.getSetCookie?.() ?? []) {
     const [pair] = value.split(";");
@@ -789,6 +792,227 @@ try {
     assert((await mediaStatus(keptKey)) >= 400, "the last row's attachment survived its purge");
     const left = await countFiles(path.join(tempDir, "media"));
     assert(left === 1, `${left} file(s) left in storage; only the object an edit orphaned should remain`);
+  });
+
+  /* ---- direct-to-storage photo uploads --------------------------------------
+   * A Vercel function's request-body ceiling (4.5 MB) sits below this app's own
+   * per-file limit, so a big photo cannot be carried by `action=upload` at any batch
+   * size — that is the "HTTP 413" the Computer Teacher hit with a 5.76 MB edited
+   * picture. The fix routes such a file straight into storage with a single-path
+   * grant, and this API only ever sees the key. These checks drive that flow over real
+   * HTTP against the local store (the local driver stands in for the signed URL), so
+   * nothing here reaches Supabase, Vercel or the school's real data.
+   */
+  console.log("\n— direct-to-storage photo uploads —");
+  const STAGING_SHAPE = /^images\/incoming\/\d{4}-\d{2}\/[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+  let directAlbum = "";
+  let directPhotoUrl = "";
+
+  /** A real PNG, padded after IEND to exactly the size the teacher reported. */
+  const photoOf = async (bytes) => {
+    const base = await fs.readFile(pngFile);
+    return base.length >= bytes ? base.subarray(0, bytes) : Buffer.concat([base, Buffer.alloc(bytes - base.length, 0x5a)]);
+  };
+  const grant = async (body) => call("/api/cms/photos?action=begin", { method: "POST", body });
+  const commit = (body) => call("/api/cms/photos?action=commit", { method: "POST", body });
+  /** The whole client side of one oversized photo: grant, PUT the bytes, register. */
+  const uploadDirect = async ({ album, name, buffer, extra = {} }) => {
+    const begin = await grant({ album_id: album, name, size: buffer.length });
+    if (begin.status !== 201 || !begin.json?.supported) return { begin, put: null, commit: null };
+    const put = await call(begin.json.upload_url, {
+      method: begin.json.method || "PUT",
+      bodyRaw: buffer,
+      headers: { "content-type": (begin.json.headers || {})["content-type"] || "application/octet-stream" },
+    });
+    const done = await commit({ album_id: album, staging_key: begin.json.staging_key, name, ...extra });
+    return { begin, put, commit: done, stagingKey: begin.json.staging_key };
+  };
+
+  await check("a 5.76 MB photo is granted, stored and registered — byte for byte", async () => {
+    const created = await call("/api/cms/albums", { method: "POST", body: { title: "সরাসরি আপলোড", published_at: "2026-12-01", status: "draft" } });
+    assert(created.status === 201, JSON.stringify(created.json));
+    directAlbum = created.json.item.id;
+    const buffer = await photoOf(5_760_000); // what the teacher's edited photo measured
+    const result = await uploadDirect({ album: directAlbum, name: "edit-5-76.png", buffer });
+    assert(result.begin?.status === 201 && result.begin.json.supported === true, `begin → ${result.begin?.status} ${JSON.stringify(result.begin?.json)}`);
+    assert(STAGING_SHAPE.test(result.begin.json.staging_key), `grant named an unexpected key: ${result.begin.json.staging_key}`);
+    assert(!/action=upload/.test(result.begin.json.upload_url), "the grant sent the file back to the form endpoint");
+    assert(result.put.status === 201, `staging write → ${result.put.status}`);
+    assert(result.commit.status === 201, `commit → ${result.commit.status} ${JSON.stringify(result.commit.json)}`);
+    const photo = result.commit.json.photo;
+    assert(photo.bytes === buffer.length, `row says ${photo.bytes} bytes for a ${buffer.length} byte file`);
+    assert(photo.mime === "image/png" && photo.pixel_width > 0, `type not sniffed from the bytes: ${photo.mime} ${photo.pixel_width}`);
+    assert(/^[0-9a-f-]{36}$/.test(photo.id), JSON.stringify(photo));
+    directPhotoUrl = photo.url;
+    const served = await call(photo.url, { raw: true });
+    assert(served.status === 200, `served ${served.status}`);
+    assert(Buffer.compare(served.buffer, buffer) === 0, "the stored bytes are not the bytes that were sent");
+  });
+  await check("no request that carries the file ever touches the form endpoint", async () => {
+    // The two calls this API makes for an oversized photo carry a key and a name, not
+    // the picture: that is the whole point of the detour around the host's ceiling.
+    const buffer = await photoOf(6_000_000);
+    const begin = await grant({ album_id: directAlbum, name: "six-meg.png", size: buffer.length });
+    assert(begin.status === 201 && begin.json.supported === true, JSON.stringify(begin.json));
+    const beginBytes = Buffer.byteLength(JSON.stringify(begin.json));
+    assert(beginBytes < 1500, `the grant response alone is ${beginBytes} bytes`);
+    const staging = begin.json.staging_key;
+    const put = await call(begin.json.upload_url, { method: "PUT", bodyRaw: buffer, headers: { "content-type": "image/png" } });
+    assert(put.status === 201, `staging write → ${put.status}`);
+    const done = await commit({ album_id: directAlbum, staging_key: staging, name: "six-meg.png" });
+    assert(done.status === 201 && done.json.photo.bytes === buffer.length, `${done.status} ${JSON.stringify(done.json)}`);
+    assert(Buffer.byteLength(JSON.stringify(done.json)) < 1500, "the commit response should describe the photo, not carry it");
+  });
+  await check("a declared size cannot smuggle a bigger file past the cap", async () => {
+    const big = await photoOf(9_000_000); // over the server's own 8 MB ceiling
+    const begin = await grant({ album_id: directAlbum, name: "liar.png", size: 1024 }); // client claims 1 KB
+    assert(begin.status === 201 && begin.json.supported === true, JSON.stringify(begin.json));
+    await call(begin.json.upload_url, { method: "PUT", bodyRaw: big, headers: { "content-type": "image/png" } });
+    const done = await commit({ album_id: directAlbum, staging_key: begin.json.staging_key, name: "liar.png" });
+    assert(done.status === 413, `oversized bytes were accepted with ${done.status}`);
+    assert(/8 MB/.test(String(done.json?.message)), `the message did not name the limit: ${JSON.stringify(done.json)}`);
+    // Refusing it must also clear staging, or a refused file would pile up in the bucket.
+    const again = await commit({ album_id: directAlbum, staging_key: begin.json.staging_key, name: "liar.png" });
+    assert(again.status === 404, `staging still held the rejected file (${again.status})`);
+  });
+  await check("a file storage would not accept is refused before any upload is wasted", async () => {
+    const { status, json } = await grant({ album_id: directAlbum, name: "huge.png", size: 40_000_000 });
+    assert(status === 413 && /২০০০ পিক্সেল/.test(String(json?.message)), `${status} ${JSON.stringify(json)}`);
+  });
+  await check("bytes that are not an image never become a photo, and staging is cleared", async () => {
+    const begin = await grant({ album_id: directAlbum, name: "trojan.png", size: 4096 });
+    assert(begin.status === 201, JSON.stringify(begin.json));
+    const payload = Buffer.concat([Buffer.from("#!/bin/sh\nrm -rf /\n".repeat(80))]);
+    const put = await call(begin.json.upload_url, { method: "PUT", bodyRaw: payload, headers: { "content-type": "image/png" } });
+    assert(put.status === 201, `storage took the bytes (${put.status}) — that is fine, the API must not`);
+    const done = await commit({ album_id: directAlbum, staging_key: begin.json.staging_key, name: "trojan.png" });
+    assert(done.status === 415, `a non-image was registered (${done.status})`);
+    const { json: after } = await call(`/api/cms/albums?id=${directAlbum}`);
+    assert(!JSON.stringify(after).includes("trojan"), "a refused file left a row behind");
+    const again = await commit({ album_id: directAlbum, staging_key: begin.json.staging_key, name: "trojan.png" });
+    assert(again.status === 404, `the rejected object was left in storage (${again.status})`);
+  });
+  await check("an unfinished upload registers nothing and says so", async () => {
+    const begin = await grant({ album_id: directAlbum, name: "never-finished.png", size: 5_000_000 });
+    const { json: before } = await call(`/api/cms/albums?id=${directAlbum}`);
+    const done = await commit({ album_id: directAlbum, staging_key: begin.json.staging_key, name: "never-finished.png" });
+    assert(done.status === 404 && /শেষ হয়নি|পাওয়া যায়নি/.test(String(done.json?.message)), `${done.status} ${JSON.stringify(done.json)}`);
+    const { json: after } = await call(`/api/cms/albums?id=${directAlbum}`);
+    assert(after.item.photos.length === before.item.photos.length, "a photo row appeared for bytes that never arrived");
+  });
+  await check("an uncommitted staging object cannot be shown to anyone", async () => {
+    const begin = await grant({ album_id: directAlbum, name: "invisible.png", size: 2_000_000 });
+    const staging = begin.json.staging_key;
+    await call(begin.json.upload_url, { method: "PUT", bodyRaw: await photoOf(2_000_000), headers: { "content-type": "image/png" } });
+    // Not merely private: the key shape is outside the media route's own pattern, so a
+    // half-finished upload has no URL at all.
+    const anonymous = await call(`/api/media?path=${encodeURIComponent(staging)}`, { raw: true });
+    assert(anonymous.status === 400, `staging was reachable (${anonymous.status})`);
+    const savedCookie = new Map(jar);
+    jar.clear();
+    const asVisitor = await call(`/api/media?path=${encodeURIComponent(staging)}`, { raw: true });
+    jar.clear();
+    for (const [name, value] of savedCookie) jar.set(name, value);
+    assert(asVisitor.status === 400, `a visitor could read staging (${asVisitor.status})`);
+    const aborted = await call("/api/cms/photos?action=abort", { method: "POST", body: { staging_key: staging } });
+    assert(aborted.status === 200 && aborted.json.removed === true, JSON.stringify(aborted.json));
+  });
+  await check("the same grant cannot register a photo twice", async () => {
+    const buffer = await photoOf(4_800_000); // bigger than the host's request ceiling on purpose
+    const begin = await grant({ album_id: directAlbum, name: "once.png", size: buffer.length });
+    await call(begin.json.upload_url, { method: "PUT", bodyRaw: buffer, headers: { "content-type": "image/png" } });
+    const first = await commit({ album_id: directAlbum, staging_key: begin.json.staging_key, name: "once.png" });
+    const second = await commit({ album_id: directAlbum, staging_key: begin.json.staging_key, name: "once.png" });
+    assert(first.status === 201, `first commit → ${first.status}`);
+    assert(second.status === 404, `a used grant committed twice (${second.status})`);
+  });
+  await check("cleanup can never name a stored asset, only staging", async () => {
+    const { json } = await call("/api/public/gallery?albums=20&per_album=20");
+    const album = json.albums.find((candidate) => candidate.id === directAlbum);
+    const victimUrl = album?.photos?.[0]?.full || directPhotoUrl;
+    const victimKey = new URL(victimUrl, BASE).searchParams.get("path");
+    assert(victimKey, "no real photo to protect");
+    const bogusCommit = await commit({ album_id: directAlbum, staging_key: victimKey, name: "x.png" });
+    assert(bogusCommit.status === 400, `commit accepted a published key (${bogusCommit.status})`);
+    const bogusAbort = await call("/api/cms/photos?action=abort", { method: "POST", body: { staging_key: victimKey } });
+    assert(bogusAbort.status === 200 && bogusAbort.json.removed === false, JSON.stringify(bogusAbort.json));
+    const stillThere = await call(victimUrl, { raw: true });
+    assert(stillThere.status === 200 && stillThere.buffer.length > 1000, "the school's photo was touched by a cleanup call");
+  });
+  await check("the grant is not a public door: anonymous and forged-origin calls fail", async () => {
+    const open = new Map(jar);
+    jar.clear();
+    const anonymous = await grant({ album_id: directAlbum, name: "x.png", size: 5_000_000 });
+    // Back to the real session, but with a token and an origin that are not the page's.
+    jar.clear();
+    for (const [name, value] of open) jar.set(name, value);
+    const forged = await call("/api/cms/photos?action=begin", {
+      method: "POST",
+      body: { album_id: directAlbum, name: "x.png", size: 5_000_000 },
+      headers: { "x-csrf-token": "not-the-users-token", origin: "https://evil.example" },
+    });
+    assert(anonymous.status === 401, `an anonymous caller got a grant (${anonymous.status})`);
+    assert(forged.status === 403, `a forged origin/token was accepted (${forged.status})`);
+  });
+  await check("a swept staging object goes, a live one does not", async () => {
+    const label = new Date().toISOString().slice(0, 7);
+    const dir = path.join(tempDir, "media", "images", "incoming", label);
+    await fs.mkdir(dir, { recursive: true });
+    const stale = path.join(dir, "aaaaaaaa-0000-4000-8000-000000000000");
+    const fresh = path.join(dir, "bbbbbbbb-0000-4000-8000-000000000000");
+    const outside = path.join(tempDir, "media", "images", label, "cccccccc-0000-4000-8000-000000000000.png");
+    for (const file of [stale, fresh, outside]) await fs.writeFile(file, "x");
+    await fs.utimes(stale, new Date(Date.now() - 9 * 3600e3), new Date(Date.now() - 9 * 3600e3));
+    await grant({ album_id: directAlbum, name: "sweep-me.png", size: 1024 }); // begin sweeps
+    assert(!(await fs.stat(stale).then(() => true, () => false)), "an abandoned 9-hour-old staging object survived the sweep");
+    assert(await fs.stat(fresh).then(() => true, () => false), "a staging object still inside its window was deleted");
+    assert(await fs.stat(outside).then(() => true, () => false), "the sweep reached outside images/incoming — it may only ever clear staging");
+    for (const file of [fresh, outside]) await fs.rm(file, { force: true });
+  });
+  await check("form-uploaded and directly-uploaded photos render in one album, in order", async () => {
+    // Two files in one form request, so a position clash between them is visible here.
+    const form = new FormData();
+    form.set("album_id", directAlbum);
+    form.append("files", new Blob([await photoOf(300_000)], { type: "image/png" }), "small.png");
+    form.append("files", new Blob([await photoOf(320_000)], { type: "image/png" }), "other.png");
+    const viaForm = await call("/api/cms/photos?action=upload", { method: "POST", body: form });
+    assert(viaForm.status === 201 && viaForm.json.photos.length === 2, `${viaForm.status} ${JSON.stringify(viaForm.json)}`);
+    await call(`/api/cms/albums/publish?id=${directAlbum}`, { method: "POST" });
+    const { json } = await call("/api/public/gallery?albums=20&per_album=20");
+    const album = json.albums.find((candidate) => candidate.id === directAlbum);
+    assert(album && album.photos.length >= 4, `the published album shows ${album?.photos?.length} photos`);
+    assert(album.photos.every((photo) => photo.thumb.startsWith("/api/media?path=") && photo.full.startsWith("/api/media?path=")), "a media url left the /api/media?path= form");
+    // Ordering is checked on the admin view, which is where the sequence is managed: the
+    // public feed carries only what a page renders. Consecutive and unique, because a
+    // batch that adds several photos at once used to give two of them the same position.
+    const { json: adminView } = await call(`/api/cms/albums?id=${directAlbum}`);
+    const ordered = adminView.item.photos.map((photo) => photo.sort_order);
+    assert(ordered.every((value) => Number.isFinite(value)), `positions missing entirely: ${JSON.stringify(ordered)}`);
+    assert(ordered.join(",") === ordered.slice().sort((a, b) => a - b).join(","), `sort order jumped around: ${ordered.join(",")}`);
+    assert(new Set(ordered).size === ordered.length, `two photos share a position: ${ordered.join(",")}`);
+    assert(ordered.slice(0, 5).join(",") === "0,1,2,3,4", `positions are not consecutive from the front: ${ordered.join(",")}`);
+    for (const photo of album.photos) {
+      const { status } = await call(photo.full, { raw: true });
+      assert(status === 200, `${photo.full} served ${status}`);
+    }
+  });
+  await check("a completed upload leaves no staging bytes behind", async () => {
+    const left = await countFiles(path.join(tempDir, "media", "images", "incoming"));
+    assert(left === 0, `${left} staging object(s) were left behind after uploads finished`);
+  });
+  await check("with direct uploads switched off the form path still answers", async () => {
+    /* CMS_DIRECT_UPLOADS=0 is the documented escape hatch. The API must say so in the
+     * status payload, and the small photos that always worked must keep working. */
+    const { json } = await call("/api/cms/status");
+    assert(json.limits && typeof json.limits.directUploads === "boolean", `status does not report the capability: ${JSON.stringify(json.limits)}`);
+    assert(json.limits.directUploads === true, "the local driver should support grants, so the admin plans a direct step");
+    const tooBigForm = new FormData();
+    tooBigForm.set("album_id", directAlbum);
+    tooBigForm.append("files", new Blob([await photoOf(5_760_000)], { type: "image/png" }), "too-big-for-one-request.png");
+    const refused = await call("/api/cms/photos?action=upload", { method: "POST", body: tooBigForm });
+    // Our own form path still accepts it — the 4.5 MB ceiling is the platform's, not the
+    // app's, which is exactly why an oversized photo must not be sent that way at all.
+    assert(refused.status === 201, `${refused.status} ${JSON.stringify(refused.json)}`);
   });
 
   console.log("\n— cleanup —");

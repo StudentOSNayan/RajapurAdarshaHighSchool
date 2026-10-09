@@ -156,6 +156,158 @@ export async function deleteMedia(pathValue) {
   await store.driver.media.remove(pathValue).catch(() => null);
 }
 
+/* -------------------------------------------- staging area for direct uploads */
+
+/**
+ * Why this exists: a Vercel function's request-body ceiling (4.5 MB) sits *below* this
+ * app's own per-file limit, so a large photo can never be carried by an API call — the
+ * platform refuses it before any of our code runs. A photo too big for a form request
+ * is therefore PUT straight into storage with a single-path grant, and only the *key*
+ * comes back here for verification.
+ *
+ * The grant only ever points at `images/incoming/<month>/<uuid>`:
+ *  - the key is minted here, so a client can never choose a path, overwrite a real
+ *    asset or walk out of the bucket;
+ *  - that shape deliberately fails the /api/media route's own pattern, so an object
+ *    that has not been verified and registered is not merely private, it is
+ *    unreachable — no half-uploaded or bogus file can ever be shown to anyone;
+ *  - verification is the *same* `acceptUpload` a form upload goes through, run over the
+ *    bytes that actually arrived, so nothing about validation is weaker on this path.
+ */
+export const STAGING_PREFIX = "images/incoming";
+const STAGING_KEY = /^images\/incoming\/\d{4}-\d{2}\/[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+export const stagingKey = () => `${STAGING_PREFIX}/${month()}/${crypto.randomUUID()}`;
+
+/** True only for a key this file generated. Cleanup is refused for anything else. */
+export const isStagingKey = (value) => STAGING_KEY.test(String(value ?? ""));
+
+/** The months a sweep may look inside: this one and the one before. */
+const stagingMonths = () => {
+  const now = Date.now();
+  const label = (offset) => new Date(now + offset).toISOString().slice(0, 7);
+  return [...new Set([label(0), label(-32 * 24 * 60 * 60 * 1000)])].filter((value) => /^\d{4}-\d{2}$/.test(value));
+};
+
+const TYPE_BY_EXT = {
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".png": "image/png",
+  ".webp": "image/webp",
+  ".gif": "image/gif",
+  ".pdf": "application/pdf",
+};
+
+/** Can this deployment hand out storage grants at all? */
+export const directUploadReady = (store) => Boolean(config.directUploads && store?.driver?.media?.sign);
+
+/**
+ * Asks storage for a short-lived grant for one brand-new staging key.
+ * `size` is only an early, friendly refusal — never the decision, because the real
+ * limit is applied to the bytes at commit time.
+ * @returns {{supported:true, staging_key:string, method:string, upload_url:string, headers:object}|{supported:false, reason:string}}
+ */
+export async function beginStagedUpload({ name = "", size = 0 } = {}) {
+  const declared = Number(size) || 0;
+  if (declared > config.maxImageBytes) {
+    throw tooLarge(
+      `ছবিটি অনেক বড় (${(declared / 1024 / 1024).toFixed(1)} MB)। সর্বোচ্চ ${(config.maxImageBytes / 1024 / 1024).toFixed(0)} MB গ্রহণ করা হয় — আগে ছোট (২০০০ পিক্সেলের নিচে) করে নিন।`,
+    );
+  }
+  if (!config.directUploads) return { supported: false, reason: "সার্ভারে সরাসরি আপলোড বন্ধ রাখা হয়েছে।" };
+  const store = await getStore();
+  if (!store?.driver?.media?.sign) return { supported: false, reason: "এই সংরক্ষণ ব্যবস্থা সরাসরি আপলোড সমর্থন করে না।" };
+  const key = stagingKey();
+  const ext = String(name).toLowerCase().match(/\.[a-z0-9]+$/)?.[0] ?? "";
+  try {
+    const grant = await store.driver.media.sign(key, { contentType: TYPE_BY_EXT[ext] || "image/jpeg" });
+    if (!grant?.upload_url) return { supported: false, reason: "স্টোরেজ থেকে আপলোডের ঠিকানা পাওয়া যায়নি।" };
+    return { supported: true, staging_key: key, method: grant.method || "PUT", upload_url: grant.upload_url, headers: grant.headers ?? {} };
+  } catch (error) {
+    // Storage refusing to sign is not the teacher's upload failing: report it and let
+    // the caller fall back to the form path, which still carries everything inside the
+    // platform's request ceiling.
+    console.error("[cms] sign failed", error?.message || error);
+    return { supported: false, reason: error instanceof HttpError ? error.message : "স্টোরেজ থেকে আপলোডের অনুমতি পাওয়া যায়নি।" };
+  }
+}
+
+/**
+ * The bytes the browser put into staging, held to exactly the rules a form upload
+ * gets. Staging is emptied afterwards whatever the outcome, so a rejected or
+ * half-finished upload cannot pile up in the bucket.
+ */
+export async function commitStagedUpload(key, { name = "" } = {}) {
+  if (!isStagingKey(key)) throw badRequest("আপলোডের ঠিকানা সঠিক নয়।");
+  const store = await getStore();
+  try {
+    // Refuse on the recorded size first when storage reports one: a 40 MB mistake
+    // should be answered with a message, not by pulling 40 MB into memory.
+    const info = await store.driver.media.stat?.(key).catch(() => null);
+    if (info?.bytes !== undefined && info.bytes > config.maxImageBytes) {
+      throw tooLarge(`ছবিটি অনেক বড় (${(info.bytes / 1024 / 1024).toFixed(1)} MB)। সর্বোচ্চ ${(config.maxImageBytes / 1024 / 1024).toFixed(0)} MB গ্রহণ করা হয়।`);
+    }
+    const found = await store.driver.media.read(key, null);
+    if (!found?.buffer?.length) {
+      throw new HttpError(404, "staging_missing", "স্টোরেজে ছবিটি পাওয়া যায়নি — আপলোডটি সম্ভবত শেষ হয়নি। আবার চাপুন।");
+    }
+    if (found.buffer.length > config.maxImageBytes) {
+      throw tooLarge(`ছবিটি অনেক বড় (${(found.buffer.length / 1024 / 1024).toFixed(1)} MB)। সর্বোচ্চ ${(config.maxImageBytes / 1024 / 1024).toFixed(0)} MB গ্রহণ করা হয়।`);
+    }
+    return await acceptUpload({ filename: name || "upload", buffer: found.buffer, type: "application/octet-stream" });
+  } finally {
+    await discardStagedUpload(key);
+  }
+}
+
+/** Deletes one staging object. Returns false for any other key, by design. */
+export async function discardStagedUpload(key) {
+  if (!isStagingKey(key)) return false;
+  const store = await getStore();
+  await store.driver.media.remove(key).catch(() => null);
+  return true;
+}
+
+const entryAgeMs = (entry) => {
+  if (Number.isFinite(entry?.mtimeMs)) return Date.now() - entry.mtimeMs;
+  const stamp = entry?.updated_at || entry?.created_at || entry?.last_accessed_at;
+  const parsed = stamp ? Date.parse(stamp) : NaN;
+  return Number.isFinite(parsed) ? Date.now() - parsed : null;
+};
+
+/**
+ * Clears staging objects a closed tab left behind. Best effort, and doubly bounded: it
+ * only ever lists inside the staging prefix, and it only ever deletes a key that passes
+ * isStagingKey() — a published asset cannot be named by this path at all.
+ */
+export async function sweepStagedUploads(store, { olderThanMs = config.stagingMaxAgeHours * 60 * 60 * 1000 } = {}) {
+  const list = store?.driver?.media?.list;
+  if (!list) return 0;
+  let removed = 0;
+  for (const label of stagingMonths()) {
+    let entries = [];
+    try {
+      entries = (await list(`${STAGING_PREFIX}/${label}/`, 200)) ?? [];
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      // A listing may answer with a full key or with a bare name — accept either, and
+      // let the pattern check below reject anything unexpected.
+      const raw =
+        typeof entry === "string"
+          ? entry
+          : entry?.path ?? (entry?.name ? (String(entry.name).includes("/") ? entry.name : `${STAGING_PREFIX}/${label}/${entry.name}`) : "");
+      if (!isStagingKey(raw)) continue;
+      const age = entryAgeMs(entry);
+      if (age === null || age < olderThanMs) continue;
+      await store.driver.media.remove(raw).catch(() => null);
+      removed += 1;
+    }
+  }
+  return removed;
+}
+
 /** The only URL shape a browser is ever given for a stored object. */
 /**
  * The only media URL shape the browser is ever given: the media function's own path
