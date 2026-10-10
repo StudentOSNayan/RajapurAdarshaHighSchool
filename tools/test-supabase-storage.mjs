@@ -83,8 +83,30 @@ const createFakeStorage = () => {
     signShape: "absolute", // | "relative" | "pathless" — the answers Supabase has used
     renderFails: false,
     breakSign: false,
+    /**
+     * Bucket limits, because Supabase applies them to a signed upload too: its
+     * uploadSignedObject route calls the same uploadFromRequest() that reads
+     * `file_size_limit` and `allowed_mime_types` off the bucket row, so the browser's
+     * PUT can be refused by storage even though our own API said yes. With these set,
+     * the fake refuses the way the real service does (EntityTooLarge / InvalidMimeType).
+     */
+    fileSizeLimit: 0, // 0 = unlimited, like a bucket created without one
+    allowedMimeTypes: [], // empty = no restriction
   };
   let port = 0;
+
+  /** Supabase's own refusal shapes, so the copy this app shows is tested against them. */
+  const refusal = (status, code, message) => ({ status, payload: { statusCode: String(status), error: code, message } });
+  const checkBucketRules = (contentType, size, key, exists) => {
+    if (exists) return refusal(409, "Duplicate", "The resource already exists");
+    if (settings.fileSizeLimit > 0 && size > settings.fileSizeLimit) {
+      return refusal(413, "EntityTooLarge", `Max size allowed has been exceeded, please try again with a smaller file (limit ${settings.fileSizeLimit} bytes)`);
+    }
+    if (settings.allowedMimeTypes.length && !settings.allowedMimeTypes.includes(contentType)) {
+      return refusal(400, "InvalidMimeType", `${contentType} is not an allowed MIME type`);
+    }
+    return null;
+  };
 
   const keyFrom = (segs, from) => segs.slice(from).join("/");
   const find = (predicate) => calls.filter(predicate);
@@ -148,7 +170,8 @@ const createFakeStorage = () => {
       if (grant.used) return send(400, { error: { message: "Token already used" } });
       if (grant.expiresAt < Date.now()) return send(400, { error: { message: "Token has expired" } });
       if (grant.key !== key) return send(403, { error: { message: "Token is not valid for this path" } });
-      if (objects.has(key)) return send(409, { error: { message: "The resource already exists" } });
+      const refused = checkBucketRules(req.headers["content-type"] || "application/octet-stream", body.length, key, objects.has(key));
+      if (refused) return send(refused.status, refused.payload); // the token stays usable: nothing was written
       grant.used = true;
       objects.set(key, { buffer: body, mime: req.headers["content-type"] || "application/octet-stream", updatedAt: stamp() });
       return send(200, { Key: `object/${BUCKET}/${key}`, Id: crypto.randomUUID() });
@@ -162,6 +185,9 @@ const createFakeStorage = () => {
       if (objects.has(key) && String(req.headers["x-upsert"]) !== "true") {
         return send(409, { error: { message: "The resource already exists" } });
       }
+      // The same bucket rules apply to the API's own write of the final key.
+      const refused = checkBucketRules(req.headers["content-type"] || "application/octet-stream", body.length, key, false);
+      if (refused) return send(refused.status, refused.payload);
       objects.set(key, { buffer: body, mime: req.headers["content-type"] || "application/octet-stream", updatedAt: stamp() });
       return send(200, { Key: `object/${BUCKET}/${key}`, Id: crypto.randomUUID() });
     }
@@ -622,6 +648,56 @@ try {
       assert(stagingKeys().length === 0, "a failed sign still left a staging object");
     } finally {
       storage.settings.breakSign = false;
+    }
+  });
+
+  console.log("\n— what the bucket itself can refuse —");
+
+  await check("a bucket size limit refuses the photo at storage, after our API said yes", async () => {
+    /* Supabase reads file_size_limit off the bucket row inside uploadFromRequest(), which
+     * the signed-upload route calls too — so a bucket can say no to a file this app
+     * accepted. Nothing here can read that setting, so the behaviour that matters is that
+     * the refusal is storage's, nothing is registered, and the grant is not burned. */
+    storage.settings.fileSizeLimit = 4_000_000;
+    try {
+      const begin = await call("/api/cms/photos?action=begin", { method: "POST", body: { name: "over-bucket.png", size: 5_760_000 } });
+      assert(begin.status === 201, `our API refused before storage got a chance: ${JSON.stringify(begin.json)}`);
+      const put = await putToBucket(begin.json, await photoOf(5_760_000));
+      assert(put.status === 413, `storage answered ${put.status}`);
+      const body = await put.text();
+      assert(/EntityTooLarge/.test(body), `not the refusal Supabase sends: ${body}`);
+      assert(!storage.objects.has(begin.json.staging_key), "a refused write still landed in the bucket");
+      const recorded = storage.find((entry) => entry.path.endsWith(begin.json.staging_key) && entry.method === "PUT")[0];
+      assert(recorded.bytes === 5_760_000, `storage saw ${recorded.bytes} bytes`);
+      const commit = await call("/api/cms/photos?action=commit", { method: "POST", body: { album_id: albumId, staging_key: begin.json.staging_key, name: "over-bucket.png" } });
+      assert(commit.status === 404, `a photo was registered for bytes storage refused (${commit.status})`);
+      // The refused PUT must not consume the grant: with the limit lifted the same
+      // upload completes, which is what a retry after raising the limit depends on.
+      storage.settings.fileSizeLimit = 0;
+      const retry = await putToBucket(begin.json, await photoOf(5_760_000));
+      assert(retry.status === 200, `the same grant was unusable after the limit was lifted (${retry.status})`);
+      const done = await call("/api/cms/photos?action=commit", { method: "POST", body: { album_id: albumId, staging_key: begin.json.staging_key, name: "over-bucket.png" } });
+      assert(done.status === 201, `the retry did not complete (${done.status} ${JSON.stringify(done.json)})`);
+      committed += 1;
+    } finally {
+      storage.settings.fileSizeLimit = 0;
+    }
+  });
+
+  await check("a bucket that lists allowed MIME types refuses one it does not name", async () => {
+    storage.settings.allowedMimeTypes = ["image/jpeg"];
+    try {
+      const begin = await call("/api/cms/photos?action=begin", { method: "POST", body: { name: "png-when-only-jpeg.png", size: 200_000 } });
+      assert(begin.status === 201, JSON.stringify(begin.json));
+      const put = await putToBucket(begin.json, await photoOf(200_000));
+      assert(put.status === 400, `the bucket did not refuse the type (${put.status})`);
+      assert(/InvalidMimeType/.test(await put.text()), "the refusal was not Supabase's MIME error");
+      const commit = await call("/api/cms/photos?action=commit", { method: "POST", body: { album_id: albumId, staging_key: begin.json.staging_key, name: "png-when-only-jpeg.png" } });
+      assert(commit.status === 404, `a photo was registered for bytes the bucket refused (${commit.status})`);
+      const aborted = await call("/api/cms/photos?action=abort", { method: "POST", body: { staging_key: begin.json.staging_key } });
+      assert(aborted.json.removed === true, "the staging key could not be handed back after a bucket refusal");
+    } finally {
+      storage.settings.allowedMimeTypes = [];
     }
   });
 

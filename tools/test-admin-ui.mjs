@@ -395,7 +395,7 @@ try {
    * own code runs. So an upload of 5.76 MB that succeeds here has actually avoided
    * that ceiling rather than been promised its way past it.
    */
-  const installHost = ({ maxRequestBody = Math.round(4.5 * MB), breakPut = false } = {}) => {
+  const installHost = ({ maxRequestBody = Math.round(4.5 * MB), breakPut = false, putStatus = 0, putBody = "" } = {}) => {
     const seen = { requests: [], apiCalls: [], inFlight: 0, peak: 0 };
     const csrf = () => /rahs_csrf=([^;]+)/.exec(dom.window.document.cookie)?.[1] ?? "";
     const originalFetch = dom.window.fetch;
@@ -472,7 +472,12 @@ try {
             const bytes = await readBytes(body);
             record.bytes = bytes.length;
             record.files.push({ name: body.name, size: body.size, type: body.type, blob: body });
-            if (breakPut) {
+            if (putStatus) {
+              /* Storage refusing a file it was handed — a bucket size limit or MIME list
+               * says no in its own body, and that answer is the only clue the teacher gets. */
+              status = putStatus;
+              text = putBody;
+            } else if (breakPut) {
               status = 0; // the connection died with the file already partly sent
               text = "";
             } else {
@@ -687,6 +692,32 @@ try {
     } finally {
       host.restore();
       await settle();
+    }
+  });
+
+  await check("a refusal from the bucket is quoted, so storage is not blamed on this app", async () => {
+    /* Supabase applies the bucket's own file_size_limit and allowed_mime_types inside the
+     * signed-upload route as well, so a file this app accepted can still be refused there.
+     * What matters is what the teacher is told: the storage answer verbatim, the remaining
+     * files untouched, and the staging object handed back. */
+    const albumId = await openPhotoScreen("batching — bucket refusal");
+    const host = installHost({
+      putStatus: 413,
+      putBody: '{"statusCode":"413","error":"EntityTooLarge","message":"Max size allowed has been exceeded"}',
+    });
+    try {
+      pickFiles([await realPhoto("too-big-for-bucket.png", 5_000_000)]);
+      click(dom, "#view button", "আপলোড করুন");
+      assert(await waitFor(() => /HTTP 413/.test(hintsOf()), 200), `the bucket's answer never reached the screen: ${hintsOf()}`);
+      assert(/থেমে গেছে|আটকে গেছে/.test(hintsOf()), `the upload did not report a stop: ${hintsOf()}`);
+      assert(/স্টোরেজ ছবিটি নেয়নি/.test(hintsOf()), `the refusal was not attributed to storage: ${hintsOf()}`);
+      assert(/Max size allowed has been exceeded/.test(hintsOf()), `the bucket's own reason was dropped: ${hintsOf()}`);
+      assert((await storedPhotos(albumId)).length === 0, "a photo was registered for bytes the bucket refused");
+      const aborted = host.apiCalls.find((entry) => entry.url.includes("action=abort"));
+      assert(aborted, "the staged bytes were not handed back after a bucket refusal");
+      assert(host.forms().length === 0, `a refused direct upload fell back to a form request: ${JSON.stringify(host.forms())}`);
+    } finally {
+      host.restore();
     }
   });
 
